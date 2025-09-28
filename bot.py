@@ -5,6 +5,13 @@ import os
 import threading
 from datetime import datetime
 from typing import Dict, Optional
+import sys
+try:
+    import imghdr
+except ModuleNotFoundError:
+    import imghdr  # подключаем наш локальный файл imghdr.py
+    sys.modules["imghdr"] = imghdr
+
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
@@ -300,3 +307,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
