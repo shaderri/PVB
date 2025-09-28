@@ -1,5 +1,5 @@
 python-telegram-bot==20.4
 aiohttp==3.9.1
-pytz==2024.1
 python-dotenv==1.0.0
+pytz==2024.1
 flask
