@@ -5,23 +5,19 @@ import os
 import threading
 from datetime import datetime
 from typing import Dict, Optional
-import sys
-try:
-    import imghdr
-except ModuleNotFoundError:
-    import imghdr  # подключаем наш локальный файл imghdr.py
-    sys.modules["imghdr"] = imghdr
-
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 from flask import Flask, jsonify
 import pytz
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Настройки бота из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")  # Формат: @channel_username или -100xxxxx для приватных каналов
-API_URL = "https://plantsvsbrainrotsstocktracker.com/api/stock?since=1759075506296"
+API_URL = os.getenv("API_URL") or "https://plantsvsbrainrotsstocktracker.com/api/stock?since=1759075506296"
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "30"))  # По умолчанию 30 секунд
 
 # Проверка наличия обязательных переменных
@@ -71,17 +67,16 @@ last_stock_state = {}
 
 class StockTracker:
     def __init__(self):
-        self.session = None
-        self.bot = None
+        self.session: Optional[aiohttp.ClientSession] = None
 
     async def init_session(self):
         """Инициализация aiohttp сессии"""
-        if not self.session:
+        if not self.session or self.session.closed:
             self.session = aiohttp.ClientSession()
 
     async def close_session(self):
         """Закрытие aiohttp сессии"""
-        if self.session:
+        if self.session and not self.session.closed:
             await self.session.close()
 
     async def fetch_stock(self) -> Optional[Dict]:
@@ -127,23 +122,40 @@ class StockTracker:
                 gear.append(formatted_item)
 
         # Формирование сообщения
-        message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
+        message = "📊 *ТЕКУЩИЙ СТОК*
+
+"
 
         if seeds:
-            message += "🌱 *СЕМЕНА:*\n"
-            message += "\n".join(seeds) + "\n\n"
+            message += "🌱 *СЕМЕНА:*
+"
+            message += "
+".join(seeds) + "
+
+"
         else:
-            message += "🌱 *СЕМЕНА:* _Пусто_\n\n"
+            message += "🌱 *СЕМЕНА:* _Пусто_
+
+"
 
         if gear:
-            message += "⚔️ *СНАРЯЖЕНИЕ:*\n"
-            message += "\n".join(gear) + "\n\n"
+            message += "⚔️ *СНАРЯЖЕНИЕ:*
+"
+            message += "
+".join(gear) + "
+
+"
         else:
-            message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_\n\n"
+            message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_
+
+"
 
         # Добавляем время обновления
-        moscow_tz = pytz.timezone('Europe/Moscow')
-        current_time = datetime.now(moscow_tz).strftime("%H:%M:%S")
+        try:
+            moscow_tz = pytz.timezone('Europe/Moscow')
+            current_time = datetime.now(moscow_tz).strftime("%H:%M:%S")
+        except Exception:
+            current_time = datetime.utcnow().strftime("%H:%M:%S")
         message += f"🕒 _Обновлено: {current_time} МСК_"
 
         return message
@@ -180,14 +192,20 @@ class StockTracker:
             item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
             emoji = item_info['emoji']
 
-            moscow_tz = pytz.timezone('Europe/Moscow')
-            current_time = datetime.now(moscow_tz).strftime("%H:%M")
+            try:
+                moscow_tz = pytz.timezone('Europe/Moscow')
+                current_time = datetime.now(moscow_tz).strftime("%H:%M")
+            except Exception:
+                current_time = datetime.utcnow().strftime("%H:%M")
 
-            channel_mention = channel_id if channel_id and channel_id.startswith('@') else channel_id
+            channel_mention = channel_id if channel_id and str(channel_id).startswith('@') else channel_id
 
             message = (
-                f"{emoji} *{item_name}: x{count} в стоке!*\n"
-                f"🕒 {current_time} МСК\n\n"
+                f"{emoji} *{item_name}: x{count} в стоке!*
+"
+                f"🕒 {current_time} МСК
+
+"
                 f"{channel_mention or ''}"
             )
 
@@ -205,39 +223,61 @@ tracker = StockTracker()
 
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /stock"""
-    await update.message.reply_text("⏳ *Загрузка данных о стоке...*", parse_mode=ParseMode.MARKDOWN)
+    # Ответ о загрузке
+    if update.effective_message:
+        await update.effective_message.reply_text("⏳ *Загрузка данных о стоке...*", parse_mode=ParseMode.MARKDOWN)
 
     stock_data = await tracker.fetch_stock()
     message = tracker.format_stock_message(stock_data)
 
-    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+    if update.effective_message:
+        await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    channel_info = f"🔔 Канал для уведомлений: {CHANNEL_ID}\n" if CHANNEL_ID else "🔕 Канал для уведомлений не настроен\n"
+    channel_info = f"🔔 Канал для уведомлений: {CHANNEL_ID}
+" if CHANNEL_ID else "🔕 Канал для уведомлений не настроен
+"
 
     welcome_message = (
-        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*\n\n"
-        "📊 Используйте команду /stock чтобы посмотреть текущий сток\n\n"
+        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*
+
+"
+        "📊 Используйте команду /stock чтобы посмотреть текущий сток
+
+"
         f"{channel_info}"
-        "📦 Бот отслеживает редкие предметы:\n"
-        "• 🥕 Mr Carrot ($50m)\n"
-        "• 🍅 Tomatrio ($125m)\n"
-        "• 🍄 Shroombino ($200m)\n\n"
+        "📦 Бот отслеживает редкие предметы:
+"
+        "• 🥕 Mr Carrot ($50m)
+"
+        "• 🍅 Tomatrio ($125m)
+"
+        "• 🍄 Shroombino ($200m)
+
+"
         f"_Бот проверяет сток каждые {CHECK_INTERVAL} секунд_"
     )
-    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
+    if update.effective_message:
+        await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_message = (
-        "📚 *Доступные команды:*\n\n"
-        "/start - Информация о боте\n"
-        "/stock - Показать текущий сток\n"
-        "/help - Это сообщение\n\n"
+        "📚 *Доступные команды:*
+
+"
+        "/start - Информация о боте
+"
+        "/stock - Показать текущий сток
+"
+        "/help - Это сообщение
+
+"
         "💡 *Подсказка:* Бот автоматически проверяет сток и отправляет уведомления о редких предметах!"
     )
-    await update.message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
+    if update.effective_message:
+        await update.effective_message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
 
 async def periodic_stock_check(application: Application):
     """Периодическая проверка стока"""
@@ -253,7 +293,6 @@ async def periodic_stock_check(application: Application):
         try:
             stock_data = await tracker.fetch_stock()
             if stock_data and CHANNEL_ID:
-                # Исправленный порядок аргументов
                 await tracker.check_for_notifications(stock_data, bot, CHANNEL_ID)
 
             await asyncio.sleep(CHECK_INTERVAL)
@@ -263,6 +302,7 @@ async def periodic_stock_check(application: Application):
 
 async def post_init(application: Application):
     """Запуск периодической проверки после инициализации"""
+    # Создаём задачу, чтобы она выполнялась в фоне
     asyncio.create_task(periodic_stock_check(application))
 
 # --- Flask часть (для пингера / keep-alive) ---
@@ -301,10 +341,19 @@ def main():
     # Запуск периодической проверки после инициализации
     application.post_init = post_init
 
+    # Регистрация graceful shutdown для закрытия aiohttp сессии
+    async def _shutdown_callback(app: Application):
+        logger.info("Shutting down: closing aiohttp session")
+        try:
+            await tracker.close_session()
+        except Exception:
+            logger.exception("Ошибка при закрытии aiohttp сессии")
+
+    application.post_shutdown = _shutdown_callback
+
     # Запуск бота (блокирующий вызов)
     logger.info("Бот успешно запущен! Нажмите Ctrl+C для остановки.")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=None)
 
 if __name__ == "__main__":
     main()
-
