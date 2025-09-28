@@ -130,10 +130,10 @@ class StockTracker:
         message += "🌱 *СЕМЕНА:* _Пусто_"
 
     if gear:
-            message += "⚔️ *СНАРЯЖЕНИЕ:*"
-            message += "".join(gear) + ""
-        else:
-            message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_"
+        message += "⚔️ *СНАРЯЖЕНИЕ:*"
+        message += "".join(gear) + ""
+    else:
+        message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_"
 
         # Добавляем время обновления
         try:
@@ -186,11 +186,8 @@ class StockTracker:
             channel_mention = channel_id if channel_id and str(channel_id).startswith('@') else channel_id
 
             message = (
-                f"{emoji} *{item_name}: x{count} в стоке!*
-"
-                f"🕒 {current_time} МСК
-
-"
+                f"{emoji} *{item_name}: x{count} в стоке!*"
+                f"🕒 {current_time} МСК"
                 f"{channel_mention or ''}"
             )
 
@@ -342,3 +339,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
