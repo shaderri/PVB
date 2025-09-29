@@ -285,8 +285,8 @@ async def post_init(application: Application):
 flask_app = Flask(__name__)
 
 
-@flask_app.route("/", methods=["GET"])
-@flask_app.route("/ping", methods=["GET"])
+@flask_app.route("/", methods=["HEAD"])
+@flask_app.route("/ping", methods=["HEAD"])
 def ping():
     """Эндпоинт для пингера Render"""
     return jsonify({
@@ -296,7 +296,7 @@ def ping():
     }), 200
 
 
-@flask_app.route("/health", methods=["GET"])
+@flask_app.route("/health", methods=["HEAD"])
 def health():
     """Healthcheck эндпоинт"""
     return jsonify({"status": "healthy"}), 200
