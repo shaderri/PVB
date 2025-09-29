@@ -16,8 +16,8 @@ load_dotenv()
 
 # Настройки бота из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # Формат: @channel_username или -100xxxxx для приватных каналов
-API_URL = os.getenv("API_URL") or "https://plantsvsbrainrotsstocktracker.com/api/stock?since=1759075506296"
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Формат: @channel_username или -100xxxxx
+API_URL = os.getenv("API_URL", "https://plantsvsbrainrotsstocktracker.com/api/stock?since=1759075506296")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "30"))  # По умолчанию 30 секунд
 
 # Проверка наличия обязательных переменных
@@ -64,6 +64,7 @@ NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino"]
 
 # Хранение последнего состояния стока
 last_stock_state = {}
+
 
 class StockTracker:
     def __init__(self):
@@ -122,18 +123,19 @@ class StockTracker:
                 gear.append(formatted_item)
 
         # Формирование сообщения
-    message = "📊 *ТЕКУЩИЙ СТОК*"
-    if seeds:
-            message += "🌱 *СЕМЕНА:*"
-            message += "".join(seeds) + ""
-    else:
-        message += "🌱 *СЕМЕНА:* _Пусто_"
+        message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
+        
+        if seeds:
+            message += "🌱 *СЕМЕНА:*\n"
+            message += "\n".join(seeds) + "\n\n"
+        else:
+            message += "🌱 *СЕМЕНА:* _Пусто_\n\n"
 
-    if gear:
-        message += "⚔️ *СНАРЯЖЕНИЕ:*"
-        message += "".join(gear) + ""
-    else:
-        message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_"
+        if gear:
+            message += "⚔️ *СНАРЯЖЕНИЕ:*\n"
+            message += "\n".join(gear) + "\n\n"
+        else:
+            message += "⚔️ *СНАРЯЖЕНИЕ:* _Пусто_\n\n"
 
         # Добавляем время обновления
         try:
@@ -141,6 +143,7 @@ class StockTracker:
             current_time = datetime.now(moscow_tz).strftime("%H:%M:%S")
         except Exception:
             current_time = datetime.utcnow().strftime("%H:%M:%S")
+        
         message += f"🕒 _Обновлено: {current_time} МСК_"
 
         return message
@@ -183,13 +186,16 @@ class StockTracker:
             except Exception:
                 current_time = datetime.utcnow().strftime("%H:%M")
 
-            channel_mention = channel_id if channel_id and str(channel_id).startswith('@') else channel_id
+            channel_mention = channel_id if channel_id and str(channel_id).startswith('@') else ""
 
             message = (
-                f"{emoji} *{item_name}: x{count} в стоке!*"
-                f"🕒 {current_time} МСК"
-                f"{channel_mention or ''}"
+                f"🚨 *РЕДКИЙ ПРЕДМЕТ В СТОКЕ!* 🚨\n\n"
+                f"{emoji} *{item_name}*: x{count}\n"
+                f"🕒 {current_time} МСК\n"
             )
+            
+            if channel_mention:
+                message += f"\n{channel_mention}"
 
             await bot.send_message(
                 chat_id=channel_id,
@@ -200,12 +206,13 @@ class StockTracker:
         except Exception as e:
             logger.error(f"Ошибка при отправке уведомления: {e}")
 
+
 # Экземпляр трекера
 tracker = StockTracker()
 
+
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /stock"""
-    # Ответ о загрузке
     if update.effective_message:
         await update.effective_message.reply_text("⏳ *Загрузка данных о стоке...*", parse_mode=ParseMode.MARKDOWN)
 
@@ -215,51 +222,37 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_message:
         await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    channel_info = f"🔔 Канал для уведомлений: {CHANNEL_ID}
-" if CHANNEL_ID else "🔕 Канал для уведомлений не настроен
-"
+    channel_info = f"🔔 Канал для уведомлений: {CHANNEL_ID}" if CHANNEL_ID else "🔕 Канал для уведомлений не настроен"
 
     welcome_message = (
-        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*
-
-"
-        "📊 Используйте команду /stock чтобы посмотреть текущий сток
-
-"
-        f"{channel_info}"
-        "📦 Бот отслеживает редкие предметы:
-"
-        "• 🥕 Mr Carrot ($50m)
-"
-        "• 🍅 Tomatrio ($125m)
-"
-        "• 🍄 Shroombino ($200m)
-
-"
+        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*\n\n"
+        "📊 Используйте команду /stock чтобы посмотреть текущий сток\n\n"
+        f"{channel_info}\n\n"
+        "📦 *Бот отслеживает редкие предметы:*\n"
+        "• 🥕 Mr Carrot ($50m)\n"
+        "• 🍅 Tomatrio ($125m)\n"
+        "• 🍄 Shroombino ($200m)\n\n"
         f"_Бот проверяет сток каждые {CHECK_INTERVAL} секунд_"
     )
     if update.effective_message:
         await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_message = (
-        "📚 *Доступные команды:*
-
-"
-        "/start - Информация о боте
-"
-        "/stock - Показать текущий сток
-"
-        "/help - Это сообщение
-
-"
+        "📚 *Доступные команды:*\n\n"
+        "/start - Информация о боте\n"
+        "/stock - Показать текущий сток\n"
+        "/help - Это сообщение\n\n"
         "💡 *Подсказка:* Бот автоматически проверяет сток и отправляет уведомления о редких предметах!"
     )
     if update.effective_message:
         await update.effective_message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
+
 
 async def periodic_stock_check(application: Application):
     """Периодическая проверка стока"""
@@ -282,35 +275,50 @@ async def periodic_stock_check(application: Application):
             logger.error(f"Ошибка в периодической проверке: {e}")
             await asyncio.sleep(CHECK_INTERVAL)
 
+
 async def post_init(application: Application):
     """Запуск периодической проверки после инициализации"""
-    # Создаём задачу, чтобы она выполнялась в фоне
     asyncio.create_task(periodic_stock_check(application))
+
 
 # --- Flask часть (для пингера / keep-alive) ---
 flask_app = Flask(__name__)
 
+
 @flask_app.route("/", methods=["GET"])
 @flask_app.route("/ping", methods=["GET"])
 def ping():
-    # Возвращаем простой ответ — пингер будет считать инстанс живым
-    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}), 200
+    """Эндпоинт для пингера Render"""
+    return jsonify({
+        "status": "ok",
+        "time": datetime.utcnow().isoformat() + "Z",
+        "bot": "Plants vs Brainrots Stock Tracker"
+    }), 200
+
+
+@flask_app.route("/health", methods=["GET"])
+def health():
+    """Healthcheck эндпоинт"""
+    return jsonify({"status": "healthy"}), 200
+
 
 def run_flask():
+    """Запуск Flask сервера"""
     port = int(os.getenv("PORT", "5000"))
-    # реком: в продакшене нужно использовать gunicorn/uvicorn; для Render простого Flask.run бывает достаточно
-    logger.info(f"Запуск Flask на 0.0.0.0:{port}")
-    flask_app.run(host="0.0.0.0", port=port, threaded=True)
+    logger.info(f"Запуск Flask сервера на 0.0.0.0:{port}")
+    flask_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
 
 def main():
     """Основная функция запуска бота и Flask"""
-    logger.info("Запуск бота...")
+    logger.info("Запуск Plants vs Brainrots Stock Tracker Bot...")
 
-    # Запуск Flask в отдельном потоке, чтобы внешний пингер мог дергать /ping
+    # Запуск Flask в отдельном потоке для пингера Render
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    logger.info("Flask сервер запущен в фоновом потоке")
 
-    logger.info(f"Интервал проверки: {CHECK_INTERVAL} секунд")
+    logger.info(f"Интервал проверки стока: {CHECK_INTERVAL} секунд")
 
     # Создание приложения Telegram
     application = Application.builder().token(BOT_TOKEN).build()
@@ -324,19 +332,19 @@ def main():
     application.post_init = post_init
 
     # Регистрация graceful shutdown для закрытия aiohttp сессии
-    async def _shutdown_callback(app: Application):
-        logger.info("Shutting down: closing aiohttp session")
+    async def shutdown_callback(app: Application):
+        logger.info("Завершение работы: закрытие aiohttp сессии")
         try:
             await tracker.close_session()
-        except Exception:
-            logger.exception("Ошибка при закрытии aiohttp сессии")
+        except Exception as e:
+            logger.exception(f"Ошибка при закрытии aiohttp сессии: {e}")
 
-    application.post_shutdown = _shutdown_callback
+    application.post_shutdown = shutdown_callback
 
     # Запуск бота (блокирующий вызов)
-    logger.info("Бот успешно запущен! Нажмите Ctrl+C для остановки.")
+    logger.info("🚀 Бот успешно запущен! Нажмите Ctrl+C для остановки.")
     application.run_polling(allowed_updates=None)
+
 
 if __name__ == "__main__":
     main()
-
