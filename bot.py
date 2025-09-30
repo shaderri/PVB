@@ -302,9 +302,6 @@ tracker = StockTracker()
 
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /stock"""
-    if update.effective_message:
-        await update.effective_message.reply_text("⏳ *Загрузка данных о стоке...*", parse_mode=ParseMode.MARKDOWN)
-
     stock_data = await tracker.fetch_stock()
     message = tracker.format_stock_message(stock_data)
 
