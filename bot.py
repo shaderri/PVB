@@ -4,11 +4,11 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, List
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import pytz
 from dotenv import load_dotenv
 
@@ -16,12 +16,18 @@ load_dotenv()
 
 # Настройки бота из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # Формат: @channel_username или -100xxxxx
-API_URL = os.getenv("API_URL", "https://plantsvsbrainrotsstocktracker.com/api/stock?since=1759075506296")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# НОВАЯ ЛОГИКА: проверка каждые 5 минут + 6 секунд
+# Supabase API настройки
+SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
+SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
+
+SEEDS_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
+GEAR_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
+
+# Интервал проверки: каждые 5 минут + 15 секунд
 CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 6  # Задержка после каждых 5 минут для обновления API
+CHECK_DELAY_SECONDS = 15
 
 # Проверка наличия обязательных переменных
 if not BOT_TOKEN:
@@ -54,7 +60,6 @@ ITEMS_DATA = {
     "Bat": {"emoji": "🏏", "price": "Free", "category": "gear"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
-    "Frost grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
     "Lucky Potion": {"emoji": "🍀", "price": "TBD", "category": "gear"},
@@ -68,7 +73,7 @@ NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino"]
 # Хранение последнего состояния стока
 last_stock_state: Dict[str, int] = {}
 
-# Хранение времени последнего уведомления для каждого предмета (защита от спама)
+# Хранение времени последнего уведомления для каждого предмета
 last_notification_time: Dict[str, datetime] = {}
 
 # Минимальный интервал между уведомлениями об одном предмете (в секундах)
@@ -76,7 +81,7 @@ NOTIFICATION_COOLDOWN = 300  # 5 минут
 
 
 def get_next_check_time() -> datetime:
-    """Вычисляет следующее время проверки (каждые 5 минут + 6 секунд)"""
+    """Вычисляет следующее время проверки (каждые 5 минут + 15 секунд)"""
     moscow_tz = pytz.timezone('Europe/Moscow')
     now = datetime.now(moscow_tz)
     
@@ -121,14 +126,18 @@ class StockTracker:
         if self.session and not self.session.closed:
             await self.session.close()
 
-    async def fetch_stock(self) -> Optional[Dict]:
-        """Получение данных о стоке"""
+    async def fetch_supabase_api(self, url: str) -> Optional[List[Dict]]:
+        """Получение данных из Supabase API"""
         try:
             await self.init_session()
-            async with self.session.get(API_URL, timeout=10) as response:
+            headers = {
+                "apikey": SUPABASE_API_KEY,
+                "Authorization": f"Bearer {SUPABASE_API_KEY}"
+            }
+            
+            async with self.session.get(url, headers=headers, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"✅ Получены данные о стоке: {len(data.get('data', []))} предметов")
                     return data
                 else:
                     logger.error(f"❌ API вернул статус {response.status}")
@@ -137,7 +146,39 @@ class StockTracker:
             logger.error("❌ Timeout при запросе к API")
             return None
         except Exception as e:
-            logger.error(f"❌ Ошибка при получении стока: {e}")
+            logger.error(f"❌ Ошибка при получении данных: {e}")
+            return None
+
+    async def fetch_stock(self) -> Optional[Dict]:
+        """Получение данных о стоке из обоих API (seeds + gear)"""
+        try:
+            # Получаем данные параллельно
+            seeds_task = self.fetch_supabase_api(SEEDS_API_URL)
+            gear_task = self.fetch_supabase_api(GEAR_API_URL)
+            
+            seeds_data, gear_data = await asyncio.gather(seeds_task, gear_task)
+            
+            if seeds_data is None and gear_data is None:
+                logger.error("❌ Не удалось получить данные ни из одного API")
+                return None
+            
+            # Объединяем данные
+            combined_data = []
+            
+            if seeds_data:
+                combined_data.extend(seeds_data)
+                logger.info(f"✅ Получено семян: {len(seeds_data)}")
+            
+            if gear_data:
+                combined_data.extend(gear_data)
+                logger.info(f"✅ Получено снаряжения: {len(gear_data)}")
+            
+            logger.info(f"✅ Всего предметов в стоке: {len(combined_data)}")
+            
+            return {"data": combined_data}
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при объединении данных: {e}")
             return None
 
     def format_stock_message(self, stock_data: Dict) -> str:
@@ -149,23 +190,22 @@ class StockTracker:
         gear = []
 
         for item in stock_data['data']:
-            name = item.get('name', '')
-            stock_count = item.get('stock', 0)
-            available = item.get('available', False)
-            category = item.get('category', '')
+            display_name = item.get('display_name', '')
+            multiplier = item.get('multiplier', 0)
+            item_type = item.get('type', '')
 
-            if not available or stock_count == 0:
+            if not display_name or multiplier == 0:
                 continue
 
-            item_info = ITEMS_DATA.get(name, {"emoji": "📦", "price": "Unknown"})
+            item_info = ITEMS_DATA.get(display_name, {"emoji": "📦", "price": "Unknown"})
             emoji = item_info['emoji']
             price = item_info['price']
 
-            formatted_item = f"{emoji} *{name}*: x{stock_count} ({price})"
+            formatted_item = f"{emoji} *{display_name}*: x{multiplier} ({price})"
 
-            if category == 'SEEDS':
+            if item_type == 'seeds':
                 seeds.append(formatted_item)
-            elif category == 'GEAR':
+            elif item_type == 'gear':
                 gear.append(formatted_item)
 
         # Формирование сообщения
@@ -220,12 +260,11 @@ class StockTracker:
         
         # Собираем текущие данные о стоке
         for item in stock_data['data']:
-            name = item.get('name', '')
-            stock_count = item.get('stock', 0)
-            available = item.get('available', False)
+            display_name = item.get('display_name', '')
+            multiplier = item.get('multiplier', 0)
 
-            if available and stock_count > 0:
-                current_stock[name] = stock_count
+            if display_name and multiplier > 0:
+                current_stock[display_name] = multiplier
 
         logger.info(f"📦 Текущий сток редких предметов: {current_stock}")
         logger.info(f"📝 Предыдущий сток: {last_stock_state}")
@@ -234,11 +273,6 @@ class StockTracker:
         for item_name in NOTIFICATION_ITEMS:
             current_count = current_stock.get(item_name, 0)
             previous_count = last_stock_state.get(item_name, 0)
-            
-            # УСЛОВИЯ для отправки уведомления:
-            # 1. Предмет появился в стоке (был 0, стал > 0)
-            # 2. Количество предмета увеличилось
-            # 3. Прошел cooldown с последнего уведомления
             
             should_notify = False
             
@@ -322,7 +356,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🍅 Tomatrio ($125m)\n"
         "• 🍄 Shroombino ($200m)\n\n"
         f"⏱️ _Бот проверяет сток каждые {CHECK_INTERVAL_MINUTES} минут + {CHECK_DELAY_SECONDS} секунд_\n"
-        f"_(например: 13:05:06, 13:10:06, 13:15:06)_"
+        f"_(например: 13:05:15, 13:10:15, 13:15:15)_"
     )
     if update.effective_message:
         await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
@@ -349,7 +383,7 @@ async def periodic_stock_check(application: Application):
     
     logger.info(f"🚀 Запущена периодическая проверка стока")
     logger.info(f"⏱️ Интервал: каждые {CHECK_INTERVAL_MINUTES} минут + {CHECK_DELAY_SECONDS} секунд")
-    logger.info(f"📝 Примеры времени проверки: 13:05:06, 13:10:06, 13:15:06")
+    logger.info(f"📝 Примеры времени проверки: 13:05:15, 13:10:15, 13:15:15")
     
     if CHANNEL_ID:
         logger.info(f"📢 Уведомления будут отправляться в: {CHANNEL_ID}")
@@ -401,10 +435,13 @@ async def post_init(application: Application):
 flask_app = Flask(__name__)
 
 
-@flask_app.route("/", methods=["HEAD"])
-@flask_app.route("/ping", methods=["HEAD"])
+@flask_app.route("/", methods=["GET", "HEAD"])
+@flask_app.route("/ping", methods=["GET", "HEAD"])
 def ping():
-    """Эндпоинт для пингера Render"""
+    """Эндпоинт для пингера Render (поддержка HEAD запросов)"""
+    if request.method == "HEAD":
+        return "", 200
+    
     moscow_tz = pytz.timezone('Europe/Moscow')
     now = datetime.now(moscow_tz)
     next_check = get_next_check_time()
@@ -418,7 +455,7 @@ def ping():
     }), 200
 
 
-@flask_app.route("/health", methods=["HEAD"])
+@flask_app.route("/health", methods=["GET"])
 def health():
     """Healthcheck эндпоинт"""
     return jsonify({"status": "healthy"}), 200
