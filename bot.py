@@ -615,36 +615,24 @@ def health():
     return jsonify({"status": "healthy", "running": tracker.is_running}), 200
 
 
-async def setup_webhook(application: Application):
-    """Настройка webhook для Render"""
-    if WEBHOOK_URL:
-        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        try:
-            await application.bot.set_webhook(url=webhook_url)
-            logger.info(f"✅ Webhook установлен: {webhook_url}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка установки webhook: {e}")
-    else:
-        logger.warning("⚠️ WEBHOOK_URL не установлен, используется polling")
-
-
 def main():
     logger.info("="*60)
     logger.info("🌱 Plants vs Brainrots Stock Tracker Bot")
     logger.info("="*60)
 
     # Создание приложения
-    application = Application.builder().token(BOT_TOKEN).build()
+    global telegram_app
+    telegram_app = Application.builder().token(BOT_TOKEN).build()
 
     # Обработчики команд
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("stock", stock_command))
-    application.add_handler(CommandHandler("weather", weather_command))
-    application.add_handler(CommandHandler("autostock", autostock_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(autostock_callback))
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("stock", stock_command))
+    telegram_app.add_handler(CommandHandler("weather", weather_command))
+    telegram_app.add_handler(CommandHandler("autostock", autostock_command))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CallbackQueryHandler(autostock_callback))
 
-    application.post_init = post_init
+    telegram_app.post_init = post_init
 
     async def shutdown_callback(app: Application):
         logger.info("🛑 Остановка бота")
@@ -655,55 +643,29 @@ def main():
         except Exception as e:
             logger.error(f"❌ Ошибка закрытия: {e}")
 
-    application.post_shutdown = shutdown_callback
+    telegram_app.post_shutdown = shutdown_callback
 
-    # Запуск
-    if WEBHOOK_URL:
-        logger.info("🌐 Режим: Webhook")
-        import uvicorn
-        from telegram.ext import ApplicationBuilder
-        
-        @flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
-        async def telegram_webhook():
-            """Обработка webhook от Telegram"""
-            try:
-                update_data = flask_request.get_json()
-                update = Update.de_json(update_data, application.bot)
-                await application.process_update(update)
-                return jsonify({"ok": True})
-            except Exception as e:
-                logger.error(f"❌ Ошибка webhook: {e}")
-                return jsonify({"ok": False}), 500
-        
-        async def startup():
-            await application.initialize()
-            await setup_webhook(application)
-            await application.start()
-            await post_init(application)
-        
-        async def shutdown():
-            await shutdown_callback(application)
-            await application.stop()
-        
-        # Запуск Flask с поддержкой async
-        import threading
-        
-        def run_bot_tasks():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(startup())
-            loop.run_forever()
-        
-        bot_thread = threading.Thread(target=run_bot_tasks, daemon=True)
-        bot_thread.start()
-        
+    # Всегда используем polling - проще и надежнее для Render
+    logger.info("🔄 Режим: Polling")
+    
+    # Запуск Flask в отдельном потоке для пингера
+    import threading
+    
+    def run_flask_server():
         port = int(os.getenv("PORT", "5000"))
         logger.info(f"🚀 Flask запущен на порту {port}")
+        # Отключаем логи Flask
+        import logging as flask_logging
+        flask_log = flask_logging.getLogger('werkzeug')
+        flask_log.setLevel(flask_logging.ERROR)
         flask_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
-    else:
-        logger.info("🔄 Режим: Polling")
-        logger.info("🚀 Бот запущен!")
-        application.run_polling(allowed_updates=None, drop_pending_updates=True)
+    
+    flask_thread = threading.Thread(target=run_flask_server, daemon=True)
+    flask_thread.start()
+    
+    logger.info("🚀 Бот запущен!")
+    logger.info("="*60)
+    telegram_app.run_polling(allowed_updates=None, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
