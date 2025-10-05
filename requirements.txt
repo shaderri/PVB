@@ -2,4 +2,5 @@ python-telegram-bot==21.8
 aiohttp==3.11.10
 Flask==3.1.0
 python-dotenv==1.0.1
+requests
 pytz==2024.2
