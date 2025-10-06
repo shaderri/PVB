@@ -551,6 +551,7 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     
+    # Просто получаем сток и показываем
     stock_data = await tracker.fetch_stock(use_cache=True)
     message = tracker.format_stock_message(stock_data)
     await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
