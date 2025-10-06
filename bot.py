@@ -23,13 +23,13 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 # Admin ID
 ADMIN_ID = 7177110883
 
-# Supabase API
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://vextbzatpprnksyutbcp.supabase.co/rest/v1")
+# Supabase API - используем прямые значения если переменные не заданы
+SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vextbzatpprnksyutbcp.supabase.co/rest/v1")
 SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800")
 
-GAME_STOCK_URL = f"{SUPABASE_URL}/game_stock"
-AUTOSTOCKS_URL = f"{SUPABASE_URL}/user_autostocks"
-USERS_URL = f"{SUPABASE_URL}/bot_users"
+GAME_STOCK_URL = f"{SUPABASE_URL_BASE}/game_stock"
+AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
+USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
 SEEDS_API_URL = f"{GAME_STOCK_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
 GEAR_API_URL = f"{GAME_STOCK_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
@@ -51,6 +51,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+logger.info(f"🔗 Supabase URL: {SUPABASE_URL_BASE}")
+logger.info(f"🔑 API Key: {SUPABASE_API_KEY[:20]}...")
 
 # Погода
 WEATHER_DATA = {
@@ -197,7 +200,6 @@ class SupabaseDB:
                 "last_seen": get_moscow_time().isoformat()
             }
             
-            # Upsert - обновит если существует
             headers = self.headers.copy()
             headers["Prefer"] = "resolution=merge-duplicates"
             
@@ -300,12 +302,20 @@ class StockTracker:
                 "Authorization": f"Bearer {SUPABASE_API_KEY}"
             }
             
+            logger.info(f"📡 Запрос: {url}")
+            
             async with self.session.get(url, headers=headers, timeout=10) as response:
+                logger.info(f"📊 Ответ: {response.status}")
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    logger.info(f"✅ Получено {len(data)} записей")
+                    return data
+                else:
+                    text = await response.text()
+                    logger.error(f"❌ Ошибка {response.status}: {text}")
                 return None
         except Exception as e:
-            logger.error(f"Ошибка API: {e}")
+            logger.error(f"❌ Ошибка API: {e}")
             return None
 
     async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
@@ -316,16 +326,19 @@ class StockTracker:
         if use_cache and stock_cache and stock_cache_time:
             now = get_moscow_time()
             if (now - stock_cache_time).total_seconds() < STOCK_CACHE_SECONDS:
+                logger.info("💾 Используем кэш")
                 return stock_cache
         
         try:
+            logger.info("🔄 Загружаем новый сток")
             seeds_data, gear_data = await asyncio.gather(
                 self.fetch_supabase_api(SEEDS_API_URL),
                 self.fetch_supabase_api(GEAR_API_URL)
             )
             
             if seeds_data is None and gear_data is None:
-                return stock_cache  # Возвращаем кэш при ошибке
+                logger.error("❌ Оба запроса вернули None")
+                return None
             
             combined_data = []
             if seeds_data:
@@ -338,11 +351,12 @@ class StockTracker:
             # Обновляем кэш
             stock_cache = result
             stock_cache_time = get_moscow_time()
+            logger.info(f"✅ Кэш обновлен: {len(combined_data)} предметов")
             
             return result
         except Exception as e:
-            logger.error(f"Ошибка fetch_stock: {e}")
-            return stock_cache
+            logger.error(f"❌ Ошибка fetch_stock: {e}")
+            return None
 
     async def fetch_weather(self) -> Optional[Dict]:
         try:
@@ -351,7 +365,7 @@ class StockTracker:
                 return weather_data[0]
             return None
         except Exception as e:
-            logger.error(f"Ошибка fetch_weather: {e}")
+            logger.error(f"❌ Ошибка fetch_weather: {e}")
             return None
 
     def format_weather_message(self, weather_data: Optional[Dict]) -> str:
@@ -551,7 +565,6 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     
-    # Просто получаем сток и показываем
     stock_data = await tracker.fetch_stock(use_cache=True)
     message = tracker.format_stock_message(stock_data)
     await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -563,7 +576,6 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    # Сохранить пользователя
     await tracker.db.save_user(
         user_id, 
         update.effective_user.username, 
@@ -600,7 +612,6 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    # Сохранить пользователя
     await tracker.db.save_user(
         user_id, 
         update.effective_user.username, 
@@ -744,11 +755,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    # Проверка прав админа
     if user_id != ADMIN_ID:
         return
     
-    # Только в ЛС
     if update.effective_chat.type != ChatType.PRIVATE:
         await update.effective_message.reply_text("❌ Рассылка доступна только в ЛС")
         return
@@ -776,7 +785,6 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     
     message_text = update.message.text
     
-    # Подтверждение
     keyboard = [
         [
             InlineKeyboardButton("✅ Да, отправить", callback_data="bc_confirm"),
@@ -785,7 +793,6 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Сохраняем текст в context
     context.user_data['broadcast_text'] = message_text
     
     await update.effective_message.reply_text(
@@ -823,14 +830,12 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         await query.edit_message_text("📤 Начинаю рассылку...")
         
-        # Получить всех пользователей
         users = await tracker.db.get_all_users()
         
         if not users:
             await query.message.reply_text("❌ Пользователи не найдены")
             return
         
-        # Рассылка
         sent = 0
         failed = 0
         
@@ -842,12 +847,11 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     parse_mode=ParseMode.MARKDOWN
                 )
                 sent += 1
-                await asyncio.sleep(0.05)  # Защита от rate limit
+                await asyncio.sleep(0.05)
             except Exception as e:
                 failed += 1
                 logger.error(f"Ошибка отправки {user_id_to_send}: {e}")
         
-        # Отчет
         report = (
             f"✅ *РАССЫЛКА ЗАВЕРШЕНА*\n\n"
             f"📊 Статистика:\n"
@@ -869,14 +873,10 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ============ END ADMIN ============
-
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_message or not update.effective_user:
         return
     
-    # Сохранить пользователя
     await tracker.db.save_user(
         update.effective_user.id, 
         update.effective_user.username, 
@@ -985,14 +985,12 @@ def main():
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-    # Обычные команды
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(CommandHandler("stock", stock_command))
     telegram_app.add_handler(CommandHandler("weather", weather_command))
     telegram_app.add_handler(CommandHandler("autostock", autostock_command))
     telegram_app.add_handler(CommandHandler("help", help_command))
     
-    # ConversationHandler для рассылки
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_command)],
         states={
@@ -1002,7 +1000,6 @@ def main():
     )
     telegram_app.add_handler(broadcast_handler)
     
-    # Callback handlers
     telegram_app.add_handler(CallbackQueryHandler(autostock_callback, pattern="^as_|^t_seed_|^t_gear_"))
     telegram_app.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^bc_"))
 
