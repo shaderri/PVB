@@ -552,14 +552,6 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     stock_data = await tracker.fetch_stock(use_cache=True)
-    
-    # Если данных нет и нет кэша - сообщаем об ошибке
-    if not stock_data or 'data' not in stock_data or len(stock_data['data']) == 0:
-        await update.effective_message.reply_text(
-            "⚠️ Не удалось загрузить данные о стоке. Попробуйте позже."
-        )
-        return
-    
     message = tracker.format_stock_message(stock_data)
     await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
@@ -990,16 +982,6 @@ def main():
     logger.info("="*60)
 
     global telegram_app
-    
-    # Принудительно удаляем webhook перед стартом
-    import requests
-    try:
-        delete_webhook_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        response = requests.get(delete_webhook_url, timeout=5)
-        logger.info(f"🔄 Webhook удален: {response.json()}")
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось удалить webhook: {e}")
-    
     telegram_app = Application.builder().token(BOT_TOKEN).build()
 
     # Обычные команды
@@ -1053,13 +1035,7 @@ def main():
     logger.info("🚀 Бот запущен!")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
     logger.info("="*60)
-    
-    # Запуск с автоматическим удалением pending updates
-    telegram_app.run_polling(
-        allowed_updates=None, 
-        drop_pending_updates=True,
-        close_loop=False
-    )
+    telegram_app.run_polling(allowed_updates=None, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
