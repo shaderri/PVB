@@ -23,17 +23,20 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 # Admin ID
 ADMIN_ID = 7177110883
 
-# Supabase API - используем прямые значения если переменные не заданы
+# Supabase API - ТОЛЬКО для автостоков и пользователей
 SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vextbzatpprnksyutbcp.supabase.co/rest/v1")
 SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800")
 
-GAME_STOCK_URL = f"{SUPABASE_URL_BASE}/game_stock"
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-SEEDS_API_URL = f"{GAME_STOCK_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
-GEAR_API_URL = f"{GAME_STOCK_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
-WEATHER_API_URL = f"{GAME_STOCK_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
+# API для стока - оригинальный
+SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
+SUPABASE_API_KEY_STOCK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
+
+SEEDS_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
+GEAR_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
+WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
 
 CHECK_INTERVAL_MINUTES = 5
 CHECK_DELAY_SECONDS = 15
@@ -52,8 +55,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-logger.info(f"🔗 Supabase URL: {SUPABASE_URL_BASE}")
-logger.info(f"🔑 API Key: {SUPABASE_API_KEY[:20]}...")
+logger.info(f"🔗 Supabase (автостоки): {SUPABASE_URL_BASE}")
+logger.info(f"🔗 API стока: {SUPABASE_URL}")
+logger.info(f"🔑 API Key: {SUPABASE_API_KEY_STOCK[:20]}...")
 
 # Погода
 WEATHER_DATA = {
@@ -295,14 +299,15 @@ class StockTracker:
         await self.db.close_session()
 
     async def fetch_supabase_api(self, url: str) -> Optional[List[Dict]]:
+        """Запрос к API стока"""
         try:
             await self.init_session()
             headers = {
-                "apikey": SUPABASE_API_KEY,
-                "Authorization": f"Bearer {SUPABASE_API_KEY}"
+                "apikey": SUPABASE_API_KEY_STOCK,
+                "Authorization": f"Bearer {SUPABASE_API_KEY_STOCK}"
             }
             
-            logger.info(f"📡 Запрос: {url}")
+            logger.info(f"📡 Запрос стока: {url[:80]}...")
             
             async with self.session.get(url, headers=headers, timeout=10) as response:
                 logger.info(f"📊 Ответ: {response.status}")
@@ -312,10 +317,10 @@ class StockTracker:
                     return data
                 else:
                     text = await response.text()
-                    logger.error(f"❌ Ошибка {response.status}: {text}")
+                    logger.error(f"❌ Ошибка {response.status}: {text[:200]}")
                 return None
         except Exception as e:
-            logger.error(f"❌ Ошибка API: {e}")
+            logger.error(f"❌ Ошибка API стока: {e}")
             return None
 
     async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
