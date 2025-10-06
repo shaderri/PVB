@@ -23,14 +23,14 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 # Admin ID
 ADMIN_ID = 7177110883
 
-# Supabase API - ТОЛЬКО для автостоков и пользователей
-SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vextbzatpprnksyutbcp.supabase.co/rest/v1")
-SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800")
+# Supabase API - ВАШИ таблицы для автостоков и пользователей
+SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
+SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
 
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-# API для стока - оригинальный
+# API для стока игры - оригинальный
 SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
 SUPABASE_API_KEY_STOCK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
 
@@ -41,7 +41,7 @@ WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.we
 CHECK_INTERVAL_MINUTES = 5
 CHECK_DELAY_SECONDS = 15
 COMMAND_COOLDOWN = 10
-STOCK_CACHE_SECONDS = 30
+STOCK_CACHE_SECONDS = 25
 
 # Состояния для рассылки
 BROADCAST_MESSAGE = 1
