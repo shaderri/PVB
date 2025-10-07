@@ -237,7 +237,10 @@ class SupabaseDB:
             async with self.session.get(url, headers=self.headers, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
+                    logger.info(f"Загружены автостоки для {user_id}: {data}")
                     return {item['item_name'] for item in data}
+                else:
+                    logger.warning(f"Статус загрузки автостоков: {response.status}")
                 return set()
         except Exception as e:
             logger.error(f"Ошибка загрузки автостоков: {e}")
@@ -249,21 +252,16 @@ class SupabaseDB:
             await self.init_session()
             data = {"user_id": user_id, "item_name": item_name}
             
-            logger.info(f"💾 Сохраняем автосток: user={user_id}, item={item_name}")
-            logger.info(f"📡 URL: {AUTOSTOCKS_URL}")
-            
             async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
-                response_text = await response.text()
-                logger.info(f"📊 Ответ {response.status}: {response_text[:200]}")
-                
-                if response.status in [200, 201]:
-                    logger.info(f"✅ Автосток сохранен: {item_name}")
-                    return True
+                success = response.status in [200, 201]
+                if success:
+                    logger.info(f"✅ Добавлен автосток: {user_id} -> {item_name}")
                 else:
-                    logger.error(f"❌ Ошибка сохранения: {response.status} - {response_text}")
-                    return False
+                    text = await response.text()
+                    logger.error(f"❌ Ошибка добавления автостока ({response.status}): {text}")
+                return success
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения автостока: {e}")
+            logger.error(f"Ошибка сохранения автостока: {e}")
             return False
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
@@ -273,7 +271,13 @@ class SupabaseDB:
             url = f"{AUTOSTOCKS_URL}?user_id=eq.{user_id}&item_name=eq.{item_name}"
             
             async with self.session.delete(url, headers=self.headers, timeout=5) as response:
-                return response.status == 204
+                success = response.status == 204
+                if success:
+                    logger.info(f"✅ Удален автосток: {user_id} -> {item_name}")
+                else:
+                    text = await response.text()
+                    logger.error(f"❌ Ошибка удаления автостока ({response.status}): {text}")
+                return success
         except Exception as e:
             logger.error(f"Ошибка удаления автостока: {e}")
             return False
@@ -737,11 +741,21 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         user_items = await tracker.db.load_user_autostocks(user_id)
         
+        # Переключаем статус
         if item_name in user_items:
-            await tracker.db.remove_user_autostock(user_id, item_name)
+            success = await tracker.db.remove_user_autostock(user_id, item_name)
+            if success:
+                await query.answer(f"❌ {item_name} удален из автостоков", show_alert=False)
+            else:
+                await query.answer("❌ Ошибка удаления", show_alert=True)
         else:
-            await tracker.db.save_user_autostock(user_id, item_name)
+            success = await tracker.db.save_user_autostock(user_id, item_name)
+            if success:
+                await query.answer(f"✅ {item_name} добавлен в автостоки", show_alert=False)
+            else:
+                await query.answer("❌ Ошибка добавления", show_alert=True)
         
+        # Перезагружаем список после изменения
         user_items = await tracker.db.load_user_autostocks(user_id)
         keyboard = []
         for name, info in ITEMS_DATA.items():
@@ -756,10 +770,11 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        # Обновляем клавиатуру
         try:
             await query.edit_message_reply_markup(reply_markup=reply_markup)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Ошибка обновления клавиатуры: {e}")
 
 
 # ============ ADMIN - BROADCAST ============
