@@ -249,10 +249,21 @@ class SupabaseDB:
             await self.init_session()
             data = {"user_id": user_id, "item_name": item_name}
             
+            logger.info(f"💾 Сохраняем автосток: user={user_id}, item={item_name}")
+            logger.info(f"📡 URL: {AUTOSTOCKS_URL}")
+            
             async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
-                return response.status in [200, 201]
+                response_text = await response.text()
+                logger.info(f"📊 Ответ {response.status}: {response_text[:200]}")
+                
+                if response.status in [200, 201]:
+                    logger.info(f"✅ Автосток сохранен: {item_name}")
+                    return True
+                else:
+                    logger.error(f"❌ Ошибка сохранения: {response.status} - {response_text}")
+                    return False
         except Exception as e:
-            logger.error(f"Ошибка сохранения автостока: {e}")
+            logger.error(f"❌ Ошибка сохранения автостока: {e}")
             return False
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
