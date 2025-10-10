@@ -3,6 +3,7 @@ import aiohttp
 import logging
 import os
 import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Set
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -112,6 +113,37 @@ stock_cache_time: Optional[datetime] = None
 
 telegram_app: Optional[Application] = None
 
+# ========== ФИКС: Маппинг для безопасных callback_data ==========
+# NAME_TO_ID: полное имя → безопасный ID (≤ 64 байта)
+# ID_TO_NAME: обратное маппирование
+NAME_TO_ID: Dict[str, str] = {}
+ID_TO_NAME: Dict[str, str] = {}
+
+
+def build_item_id_mappings():
+    """
+    ФИКС: Построить детерминированные безопасные ID для всех предметов.
+    Используем SHA1 hex (первые 8 символов) для уникальности.
+    Гарантирует, что ID никогда не превысит 64 байта и содержит только безопасные символы.
+    """
+    global NAME_TO_ID, ID_TO_NAME
+    NAME_TO_ID.clear()
+    ID_TO_NAME.clear()
+    
+    for item_name in ITEMS_DATA.keys():
+        # Генерируем детерминированный ID на основе SHA1 хеша имени
+        hash_obj = hashlib.sha1(item_name.encode('utf-8'))
+        hash_hex = hash_obj.hexdigest()[:8]
+        
+        # Формируем безопасный ID: "t_<категория>_<хеш>"
+        category = ITEMS_DATA[item_name]['category']
+        safe_id = f"t_{category}_{hash_hex}"
+        
+        NAME_TO_ID[item_name] = safe_id
+        ID_TO_NAME[safe_id] = item_name
+        
+    logger.info(f"✅ Построены маппинги: {len(NAME_TO_ID)} предметов")
+
 
 def get_moscow_time() -> datetime:
     """Получить текущее московское время"""
@@ -217,9 +249,9 @@ class SupabaseDB:
         """Получить всех пользователей бота"""
         try:
             await self.init_session()
-            url = f"{USERS_URL}?select=user_id"
+            params = {"select": "user_id"}
             
-            async with self.session.get(url, headers=self.headers, timeout=10) as response:
+            async with self.session.get(USERS_URL, headers=self.headers, params=params, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     return [item['user_id'] for item in data]
@@ -229,18 +261,15 @@ class SupabaseDB:
             return []
     
     async def load_user_autostocks(self, user_id: int) -> Set[str]:
-        """Загрузка автостоков пользователя"""
+        """ФИКС: Загрузка автостоков пользователя с использованием params"""
         try:
             await self.init_session()
-            url = f"{AUTOSTOCKS_URL}?user_id=eq.{user_id}&select=item_name"
+            params = {"user_id": f"eq.{user_id}", "select": "item_name"}
             
-            async with self.session.get(url, headers=self.headers, timeout=5) as response:
+            async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"Загружены автостоки для {user_id}: {data}")
                     return {item['item_name'] for item in data}
-                else:
-                    logger.warning(f"Статус загрузки автостоков: {response.status}")
                 return set()
         except Exception as e:
             logger.error(f"Ошибка загрузки автостоков: {e}")
@@ -254,41 +283,38 @@ class SupabaseDB:
             
             async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
                 success = response.status in [200, 201]
-                if success:
-                    logger.info(f"✅ Добавлен автосток: {user_id} -> {item_name}")
-                else:
-                    text = await response.text()
-                    logger.error(f"❌ Ошибка добавления автостока ({response.status}): {text}")
+                logger.info(f"💾 Добавлен автосток '{item_name}' для {user_id}: {response.status}")
                 return success
         except Exception as e:
             logger.error(f"Ошибка сохранения автостока: {e}")
             return False
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
-        """Удаление предмета из автостоков"""
+        """
+        ФИКС: Удаление предмета из автостоков.
+        Используем params вместо конкатенации URL.
+        Принимаем 200, 204 как успех.
+        """
         try:
             await self.init_session()
-            url = f"{AUTOSTOCKS_URL}?user_id=eq.{user_id}&item_name=eq.{item_name}"
+            params = {"user_id": f"eq.{user_id}", "item_name": f"eq.{item_name}"}
             
-            async with self.session.delete(url, headers=self.headers, timeout=5) as response:
-                success = response.status == 204
-                if success:
-                    logger.info(f"✅ Удален автосток: {user_id} -> {item_name}")
-                else:
-                    text = await response.text()
-                    logger.error(f"❌ Ошибка удаления автостока ({response.status}): {text}")
+            async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
+                success = response.status in [200, 204]
+                status_text = await response.text()
+                logger.info(f"🗑️ Удален автосток '{item_name}' для {user_id}: {response.status} | {status_text[:100]}")
                 return success
         except Exception as e:
             logger.error(f"Ошибка удаления автостока: {e}")
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        """Получить пользователей, отслеживающих предмет"""
+        """ФИКС: Получить пользователей, отслеживающих предмет с использованием params"""
         try:
             await self.init_session()
-            url = f"{AUTOSTOCKS_URL}?item_name=eq.{item_name}&select=user_id"
+            params = {"item_name": f"eq.{item_name}", "select": "user_id"}
             
-            async with self.session.get(url, headers=self.headers, timeout=5) as response:
+            async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
                     return [item['user_id'] for item in data]
@@ -670,111 +696,152 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    ФИКС: Обработка callbacks для автостоков с использованием безопасных ID.
+    Добавлена обработка ошибок при editMessageReplyMarkup.
+    """
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
     data = query.data
     
-    if data == "as_seeds":
-        user_items = await tracker.db.load_user_autostocks(user_id)
-        keyboard = []
-        for item_name, item_info in ITEMS_DATA.items():
-            if item_info['category'] == 'seed':
-                is_tracking = item_name in user_items
-                status = "✅" if is_tracking else "➕"
-                keyboard.append([InlineKeyboardButton(
-                    f"{status} {item_info['emoji']} {item_name}",
-                    callback_data=f"t_seed_{item_name}"
-                )])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("🌱 *СЕМЕНА*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    elif data == "as_gear":
-        user_items = await tracker.db.load_user_autostocks(user_id)
-        keyboard = []
-        for item_name, item_info in ITEMS_DATA.items():
-            if item_info['category'] == 'gear':
-                is_tracking = item_name in user_items
-                status = "✅" if is_tracking else "➕"
-                keyboard.append([InlineKeyboardButton(
-                    f"{status} {item_info['emoji']} {item_name}",
-                    callback_data=f"t_gear_{item_name}"
-                )])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("⚔️ *СНАРЯЖЕНИЕ*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    elif data == "as_list":
-        user_items = await tracker.db.load_user_autostocks(user_id)
-        if not user_items:
-            message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_"
-        else:
-            items_list = []
-            for item_name in user_items:
-                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
-                items_list.append(f"{item_info['emoji']} *{item_name}* ({item_info['price']})")
-            message = f"📋 *МОИ АВТОСТОКИ*\n\n" + "\n".join(items_list)
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="as_back")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    elif data == "as_back":
-        keyboard = [
-            [InlineKeyboardButton("🌱 Семена", callback_data="as_seeds")],
-            [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
-            [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        message = "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\nВыберите категорию."
-        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    elif data.startswith("t_seed_") or data.startswith("t_gear_"):
-        if data.startswith("t_seed_"):
-            item_name = data.replace("t_seed_", "")
-            category = "seed"
-        else:
-            item_name = data.replace("t_gear_", "")
-            category = "gear"
-        
-        user_items = await tracker.db.load_user_autostocks(user_id)
-        
-        # Переключаем статус
-        if item_name in user_items:
-            success = await tracker.db.remove_user_autostock(user_id, item_name)
-            if success:
-                await query.answer(f"❌ {item_name} удален из автостоков", show_alert=False)
+    try:
+        if data == "as_seeds":
+            user_items = await tracker.db.load_user_autostocks(user_id)
+            keyboard = []
+            for item_name, item_info in ITEMS_DATA.items():
+                if item_info['category'] == 'seed':
+                    is_tracking = item_name in user_items
+                    status = "✅" if is_tracking else "➕"
+                    # ФИКС: Используем безопасный ID из маппинга
+                    safe_callback = NAME_TO_ID.get(item_name, "invalid")
+                    keyboard.append([InlineKeyboardButton(
+                        f"{status} {item_info['emoji']} {item_name}",
+                        callback_data=safe_callback
+                    )])
+            keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ФИКС: Проверка на пустую клавиатуру перед вызовом
+            if keyboard and len(keyboard) > 0:
+                await query.edit_message_text("🌱 *СЕМЕНА*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
             else:
-                await query.answer("❌ Ошибка удаления", show_alert=True)
-        else:
-            success = await tracker.db.save_user_autostock(user_id, item_name)
-            if success:
-                await query.answer(f"✅ {item_name} добавлен в автостоки", show_alert=False)
+                await query.answer("❌ Нет доступных семян", show_alert=True)
+        
+        elif data == "as_gear":
+            user_items = await tracker.db.load_user_autostocks(user_id)
+            keyboard = []
+            for item_name, item_info in ITEMS_DATA.items():
+                if item_info['category'] == 'gear':
+                    is_tracking = item_name in user_items
+                    status = "✅" if is_tracking else "➕"
+                    # ФИКС: Используем безопасный ID из маппинга
+                    safe_callback = NAME_TO_ID.get(item_name, "invalid")
+                    keyboard.append([InlineKeyboardButton(
+                        f"{status} {item_info['emoji']} {item_name}",
+                        callback_data=safe_callback
+                    )])
+            keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if keyboard and len(keyboard) > 0:
+                await query.edit_message_text("⚔️ *СНАРЯЖЕНИЕ*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
             else:
-                await query.answer("❌ Ошибка добавления", show_alert=True)
+                await query.answer("❌ Нет доступного снаряжения", show_alert=True)
         
-        # Перезагружаем список после изменения
-        user_items = await tracker.db.load_user_autostocks(user_id)
-        keyboard = []
-        for name, info in ITEMS_DATA.items():
-            if info['category'] == category:
-                is_tracking = name in user_items
-                status = "✅" if is_tracking else "➕"
-                callback_prefix = "t_seed_" if category == "seed" else "t_gear_"
-                keyboard.append([InlineKeyboardButton(
-                    f"{status} {info['emoji']} {name}",
-                    callback_data=f"{callback_prefix}{name}"
-                )])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        elif data == "as_list":
+            user_items = await tracker.db.load_user_autostocks(user_id)
+            if not user_items:
+                message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_"
+            else:
+                items_list = []
+                for item_name in user_items:
+                    item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
+                    items_list.append(f"{item_info['emoji']} *{item_name}* ({item_info['price']})")
+                message = f"📋 *МОИ АВТОСТОКИ*\n\n" + "\n".join(items_list)
+            
+            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="as_back")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         
-        # Обновляем клавиатуру
+        elif data == "as_back":
+            keyboard = [
+                [InlineKeyboardButton("🌱 Семена", callback_data="as_seeds")],
+                [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
+                [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            message = "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\nВыберите категорию."
+            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        
+        elif data.startswith("t_"):
+            # ФИКС: Декодируем безопасный ID обратно в имя предмета
+            item_name = ID_TO_NAME.get(data)
+            if not item_name:
+                logger.error(f"❌ Неизвестный callback ID: {data}")
+                await query.answer("❌ Ошибка: предмет не найден", show_alert=True)
+                return
+            
+            category = ITEMS_DATA.get(item_name, {}).get('category', 'seed')
+            
+            user_items = await tracker.db.load_user_autostocks(user_id)
+            
+            # ФИКС: Логирование действий с автостоками
+            if item_name in user_items:
+                await tracker.db.remove_user_autostock(user_id, item_name)
+                logger.info(f"🗑️ Пользователь {user_id} удалил '{item_name}' из автостоков")
+            else:
+                await tracker.db.save_user_autostock(user_id, item_name)
+                logger.info(f"💾 Пользователь {user_id} добавил '{item_name}' в автостоки")
+            
+            user_items = await tracker.db.load_user_autostocks(user_id)
+            keyboard = []
+            for name, info in ITEMS_DATA.items():
+                if info['category'] == category:
+                    is_tracking = name in user_items
+                    status = "✅" if is_tracking else "➕"
+                    safe_callback = NAME_TO_ID.get(name, "invalid")
+                    keyboard.append([InlineKeyboardButton(
+                        f"{status} {info['emoji']} {name}",
+                        callback_data=safe_callback
+                    )])
+            keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ФИКС: Обработка ошибок при редактировании клавиатуры
+            try:
+                if reply_markup.inline_keyboard and len(reply_markup.inline_keyboard) > 0:
+                    await query.edit_message_reply_markup(reply_markup=reply_markup)
+                    logger.info(f"✅ Клавиатура обновлена для пользователя {user_id}")
+                else:
+                    logger.warning(f"⚠️ Пустая клавиатура для пользователя {user_id}")
+                    await query.answer("⚠️ Ошибка обновления. Попробуйте снова.", show_alert=False)
+            except TelegramError as e:
+                logger.error(f"❌ Ошибка editMessageReplyMarkup: {e}")
+                # ФИКС: Fallback - пытаемся отредактировать весь текст сообщения и клавиатуру
+                try:
+                    category_text = "🌱 *СЕМЕНА*" if category == "seed" else "⚔️ *СНАРЯЖЕНИЕ*"
+                    await query.edit_message_text(
+                        f"{category_text}\n\nВыберите предметы:",
+                        reply_markup=reply_markup,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    logger.info(f"✅ Fallback: полное редактирование сообщения выполнено")
+                except TelegramError as e2:
+                    logger.error(f"❌ Fallback также не удался: {e2}")
+                    # ФИКС: Если сообщение удалено или недоступно, ответим юзеру
+                    if "message to edit not found" in str(e2).lower():
+                        await query.answer("ℹ️ Сообщение было удалено. Используйте /autostock для начала.", show_alert=True)
+                    else:
+                        await query.answer(f"❌ Ошибка: {str(e2)[:50]}", show_alert=False)
+    
+    except Exception as e:
+        logger.error(f"❌ Общая ошибка в autostock_callback: {e}", exc_info=True)
         try:
-            await query.edit_message_reply_markup(reply_markup=reply_markup)
-        except Exception as e:
-            logger.error(f"Ошибка обновления клавиатуры: {e}")
+            await query.answer(f"❌ Произошла ошибка. Попробуйте снова.", show_alert=False)
+        except:
+            pass
 
 
 # ============ ADMIN - BROADCAST ============
@@ -1013,6 +1080,9 @@ def main():
     logger.info("🌱 Plants vs Brainrots Stock Tracker Bot")
     logger.info("="*60)
 
+    # ФИКС: Построить маппинги безопасных ID при запуске
+    build_item_id_mappings()
+
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1031,7 +1101,7 @@ def main():
     )
     telegram_app.add_handler(broadcast_handler)
     
-    telegram_app.add_handler(CallbackQueryHandler(autostock_callback, pattern="^as_|^t_seed_|^t_gear_"))
+    telegram_app.add_handler(CallbackQueryHandler(autostock_callback, pattern="^as_|^t_"))
     telegram_app.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^bc_"))
 
     telegram_app.post_init = post_init
