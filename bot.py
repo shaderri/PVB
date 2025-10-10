@@ -25,8 +25,8 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 ADMIN_ID = 7177110883
 
 # Supabase API - ВАШИ таблицы для автостоков и пользователей
-SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
-SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
+SUPABASE_URL_BASE = os.getenv("SUPABASE_URL")
+SUPABASE_API_KEY = os.getenv("SUPABASE_KEY")
 
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
@@ -118,6 +118,18 @@ telegram_app: Optional[Application] = None
 # ID_TO_NAME: обратное маппирование
 NAME_TO_ID: Dict[str, str] = {}
 ID_TO_NAME: Dict[str, str] = {}
+
+# ========== ОПТИМИЗАЦИЯ: Кэш автостоков пользователей ==========
+# user_autostocks_cache: {user_id: {item_name1, item_name2, ...}}
+# user_autostocks_time: {user_id: datetime}
+# CACHE_TTL = 60 сек: если юзер не меняет предметы часто, избегаем лишних запросов
+user_autostocks_cache: Dict[int, Set[str]] = {}
+user_autostocks_time: Dict[int, datetime] = {}
+AUTOSTOCK_CACHE_TTL = 60  # 60 секунд TTL для кэша автостоков
+
+# Предкэшированные клавиатуры по категориям (не перестраиваем каждый раз)
+SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
+GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
 
 
 def build_item_id_mappings():
