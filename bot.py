@@ -89,13 +89,10 @@ ITEMS_DATA = {
     "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
-    "Bat": {"emoji": "🏏", "price": "Free", "category": "gear"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
-    "Lucky Potion": {"emoji": "🍀", "price": "TBD", "category": "gear"},
-    "Speed Potion": {"emoji": "⚡", "price": "TBD", "category": "gear"},
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
@@ -200,13 +197,18 @@ def get_next_check_time() -> datetime:
     """Расчет времени следующей проверки"""
     now = get_moscow_time()
     current_minute = now.minute
+    current_second = now.second
+    
+    # Проверяем каждые 5 минут в :15 секунд (0:15, 5:15, 10:15, и т.д.)
     next_minute = ((current_minute // CHECK_INTERVAL_MINUTES) + 1) * CHECK_INTERVAL_MINUTES
+    next_second = CHECK_DELAY_SECONDS
     
     if next_minute >= 60:
-        next_check = now.replace(minute=0, second=CHECK_DELAY_SECONDS, microsecond=0) + timedelta(hours=1)
+        next_check = now.replace(minute=0, second=next_second, microsecond=0) + timedelta(hours=1)
     else:
-        next_check = now.replace(minute=next_minute, second=CHECK_DELAY_SECONDS, microsecond=0)
+        next_check = now.replace(minute=next_minute, second=next_second, microsecond=0)
     
+    # ОПТИМИЗАЦИЯ: Если мы уже прошли секунду :15 в текущую минуту, переходим к следующему интервалу
     if next_check <= now:
         next_check += timedelta(minutes=CHECK_INTERVAL_MINUTES)
     
@@ -960,7 +962,9 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     if user_id != ADMIN_ID:
         return ConversationHandler.END
     
-    message_text = update.message.text
+    # ОПТИМИЗАЦИЯ: Сохраняем оригинальное сообщение с форматированием
+    message_text = update.message.text or ""
+    message_html = update.message.text_html or message_text  # Если есть HTML форматирование
     
     keyboard = [
         [
@@ -970,7 +974,10 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # ОПТИМИЗАЦИЯ: Сохраняем оба варианта текста
     context.user_data['broadcast_text'] = message_text
+    context.user_data['broadcast_html'] = message_html
+    context.user_data['broadcast_entities'] = update.message.entities or []
     
     await update.effective_message.reply_text(
         f"📝 *ПРЕДПРОСМОТР СООБЩЕНИЯ:*\n\n{message_text}\n\n"
@@ -1000,6 +1007,8 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if data == "bc_confirm":
         broadcast_text = context.user_data.get('broadcast_text')
+        broadcast_html = context.user_data.get('broadcast_html')
+        broadcast_entities = context.user_data.get('broadcast_entities', [])
         
         if not broadcast_text:
             await query.edit_message_text("❌ Ошибка: текст сообщения не найден")
@@ -1018,11 +1027,20 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         for user_id_to_send in users:
             try:
-                await context.bot.send_message(
-                    chat_id=user_id_to_send,
-                    text=broadcast_text,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                # ОПТИМИЗАЦИЯ: Если есть HTML форматирование (жирный текст и т.д.), отправляем с HTML
+                # Иначе отправляем обычный текст
+                if broadcast_entities:
+                    await context.bot.send_message(
+                        chat_id=user_id_to_send,
+                        text=broadcast_html,
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=user_id_to_send,
+                        text=broadcast_text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
                 sent += 1
                 await asyncio.sleep(0.05)
             except Exception as e:
