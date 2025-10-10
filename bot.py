@@ -1,4 +1,3 @@
-import asyncio
 import aiohttp
 import logging
 import os
@@ -25,8 +24,8 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 ADMIN_ID = 7177110883
 
 # Supabase API - ВАШИ таблицы для автостоков и пользователей
-SUPABASE_URL_BASE = os.getenv("SUPABASE_URL")
-SUPABASE_API_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
+SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
 
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
@@ -130,6 +129,10 @@ AUTOSTOCK_CACHE_TTL = 60  # 60 секунд TTL для кэша автосток
 # Предкэшированные клавиатуры по категориям (не перестраиваем каждый раз)
 SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
 GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
+
+# Кэш последней отправленной клавиатуры по пользователям
+# {(user_id, category): keyboard_json_str} для быстрого сравнения
+last_keyboard_cache: Dict[tuple, str] = {}
 
 
 def build_item_id_mappings():
@@ -288,7 +291,16 @@ class SupabaseDB:
             return set()
     
     async def save_user_autostock(self, user_id: int, item_name: str) -> bool:
-        """Добавление предмета в автостоки"""
+        """
+        ОПТИМИЗАЦИЯ: При сохранении, обновляем кэш локально без ожидания ответа.
+        Добавление в БД происходит асинхронно.
+        """
+        # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш
+        if user_id not in user_autostocks_cache:
+            user_autostocks_cache[user_id] = set()
+        user_autostocks_cache[user_id].add(item_name)
+        user_autostocks_time[user_id] = get_moscow_time()
+        
         try:
             await self.init_session()
             data = {"user_id": user_id, "item_name": item_name}
@@ -303,10 +315,14 @@ class SupabaseDB:
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
         """
-        ФИКС: Удаление предмета из автостоков.
-        Используем params вместо конкатенации URL.
-        Принимаем 200, 204 как успех.
+        ОПТИМИЗАЦИЯ: При удалении, обновляем кэш локально без ожидания ответа.
+        Удаление из БД происходит асинхронно.
         """
+        # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш
+        if user_id in user_autostocks_cache:
+            user_autostocks_cache[user_id].discard(item_name)
+            user_autostocks_time[user_id] = get_moscow_time()
+        
         try:
             await self.init_session()
             params = {"user_id": f"eq.{user_id}", "item_name": f"eq.{item_name}"}
@@ -707,10 +723,27 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 
+def _keyboard_to_str(keyboard: InlineKeyboardMarkup) -> str:
+    """
+    ОПТИМИЗАЦИЯ: Преобразует клавиатуру в строку для сравнения.
+    Используется для проверки: изменилась ли клавиатура с последнего раза.
+    """
+    try:
+        buttons_data = []
+        for row in keyboard.inline_keyboard:
+            row_data = []
+            for btn in row:
+                row_data.append(f"{btn.text}:{btn.callback_data}")
+            buttons_data.append("|".join(row_data))
+        return "||".join(buttons_data)
+    except:
+        return ""
+
+
 async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     ФИКС: Обработка callbacks для автостоков с использованием безопасных ID.
-    Добавлена обработка ошибок при editMessageReplyMarkup.
+    ОПТИМИЗАЦИЯ: Кэширование автостоков юзера, быстрая переестройка клавиатуры.
     """
     query = update.callback_query
     await query.answer()
@@ -720,40 +753,37 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         if data == "as_seeds":
+            # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
             user_items = await tracker.db.load_user_autostocks(user_id)
             keyboard = []
-            for item_name, item_info in ITEMS_DATA.items():
-                if item_info['category'] == 'seed':
-                    is_tracking = item_name in user_items
-                    status = "✅" if is_tracking else "➕"
-                    # ФИКС: Используем безопасный ID из маппинга
-                    safe_callback = NAME_TO_ID.get(item_name, "invalid")
-                    keyboard.append([InlineKeyboardButton(
-                        f"{status} {item_info['emoji']} {item_name}",
-                        callback_data=safe_callback
-                    )])
+            for item_name, item_info in SEED_ITEMS_LIST:
+                is_tracking = item_name in user_items
+                status = "✅" if is_tracking else "➕"
+                safe_callback = NAME_TO_ID.get(item_name, "invalid")
+                keyboard.append([InlineKeyboardButton(
+                    f"{status} {item_info['emoji']} {item_name}",
+                    callback_data=safe_callback
+                )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # ФИКС: Проверка на пустую клавиатуру перед вызовом
             if keyboard and len(keyboard) > 0:
                 await query.edit_message_text("🌱 *СЕМЕНА*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
             else:
                 await query.answer("❌ Нет доступных семян", show_alert=True)
         
         elif data == "as_gear":
+            # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
             user_items = await tracker.db.load_user_autostocks(user_id)
             keyboard = []
-            for item_name, item_info in ITEMS_DATA.items():
-                if item_info['category'] == 'gear':
-                    is_tracking = item_name in user_items
-                    status = "✅" if is_tracking else "➕"
-                    # ФИКС: Используем безопасный ID из маппинга
-                    safe_callback = NAME_TO_ID.get(item_name, "invalid")
-                    keyboard.append([InlineKeyboardButton(
-                        f"{status} {item_info['emoji']} {item_name}",
-                        callback_data=safe_callback
-                    )])
+            for item_name, item_info in GEAR_ITEMS_LIST:
+                is_tracking = item_name in user_items
+                status = "✅" if is_tracking else "➕"
+                safe_callback = NAME_TO_ID.get(item_name, "invalid")
+                keyboard.append([InlineKeyboardButton(
+                    f"{status} {item_info['emoji']} {item_name}",
+                    callback_data=safe_callback
+                )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -788,7 +818,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         
         elif data.startswith("t_"):
-            # ФИКС: Декодируем безопасный ID обратно в имя предмета
+            # ОПТИМИЗАЦИЯ: Немедленное обновление UI, БД в фоне
             item_name = ID_TO_NAME.get(data)
             if not item_name:
                 logger.error(f"❌ Неизвестный callback ID: {data}")
@@ -797,41 +827,58 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             category = ITEMS_DATA.get(item_name, {}).get('category', 'seed')
             
-            user_items = await tracker.db.load_user_autostocks(user_id)
+            # ОПТИМИЗАЦИЯ: Получаем кэшированные данные (без ожидания свежих с БД)
+            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             
-            # ФИКС: Логирование действий с автостоками
+            # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш и UI
             if item_name in user_items:
-                await tracker.db.remove_user_autostock(user_id, item_name)
+                user_items.discard(item_name)
+                # Асинхронно удаляем из БД (не ждем ответ)
+                asyncio.create_task(tracker.db.remove_user_autostock(user_id, item_name))
                 logger.info(f"🗑️ Пользователь {user_id} удалил '{item_name}' из автостоков")
             else:
-                await tracker.db.save_user_autostock(user_id, item_name)
+                user_items.add(item_name)
+                # Асинхронно добавляем в БД (не ждем ответ)
+                asyncio.create_task(tracker.db.save_user_autostock(user_id, item_name))
                 logger.info(f"💾 Пользователь {user_id} добавил '{item_name}' в автостоки")
             
-            user_items = await tracker.db.load_user_autostocks(user_id)
+            # ОПТИМИЗАЦИЯ: Быстро перестраиваем клавиатуру на основе локального кэша
+            items_list = SEED_ITEMS_LIST if category == 'seed' else GEAR_ITEMS_LIST
             keyboard = []
-            for name, info in ITEMS_DATA.items():
-                if info['category'] == category:
-                    is_tracking = name in user_items
-                    status = "✅" if is_tracking else "➕"
-                    safe_callback = NAME_TO_ID.get(name, "invalid")
-                    keyboard.append([InlineKeyboardButton(
-                        f"{status} {info['emoji']} {name}",
-                        callback_data=safe_callback
-                    )])
+            for name, info in items_list:
+                is_tracking = name in user_items
+                status = "✅" if is_tracking else "➕"
+                safe_callback = NAME_TO_ID.get(name, "invalid")
+                keyboard.append([InlineKeyboardButton(
+                    f"{status} {info['emoji']} {name}",
+                    callback_data=safe_callback
+                )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # ФИКС: Обработка ошибок при редактировании клавиатуры
+            # ОПТИМИЗАЦИЯ: Сравниваем с последней отправленной клавиатурой
+            # Если идентична - не отправляем запрос, экономим время и трафик
+            cache_key = (user_id, category)
+            new_keyboard_str = _keyboard_to_str(reply_markup)
+            old_keyboard_str = last_keyboard_cache.get(cache_key, "")
+            
+            if new_keyboard_str == old_keyboard_str:
+                logger.debug(f"⏭️ Клавиатура не изменилась, пропускаем обновление")
+                await query.answer()  # Просто ответим на callback, но не редактируем
+                return
+            
+            # Обновляем кэш
+            last_keyboard_cache[cache_key] = new_keyboard_str
+            
             try:
                 if reply_markup.inline_keyboard and len(reply_markup.inline_keyboard) > 0:
                     await query.edit_message_reply_markup(reply_markup=reply_markup)
-                    logger.info(f"✅ Клавиатура обновлена для пользователя {user_id}")
+                    logger.debug(f"✅ Клавиатура обновлена мгновенно для {user_id}")
                 else:
                     logger.warning(f"⚠️ Пустая клавиатура для пользователя {user_id}")
                     await query.answer("⚠️ Ошибка обновления. Попробуйте снова.", show_alert=False)
             except TelegramError as e:
                 logger.error(f"❌ Ошибка editMessageReplyMarkup: {e}")
-                # ФИКС: Fallback - пытаемся отредактировать весь текст сообщения и клавиатуру
                 try:
                     category_text = "🌱 *СЕМЕНА*" if category == "seed" else "⚔️ *СНАРЯЖЕНИЕ*"
                     await query.edit_message_text(
@@ -842,7 +889,6 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     logger.info(f"✅ Fallback: полное редактирование сообщения выполнено")
                 except TelegramError as e2:
                     logger.error(f"❌ Fallback также не удался: {e2}")
-                    # ФИКС: Если сообщение удалено или недоступно, ответим юзеру
                     if "message to edit not found" in str(e2).lower():
                         await query.answer("ℹ️ Сообщение было удалено. Используйте /autostock для начала.", show_alert=True)
                     else:
