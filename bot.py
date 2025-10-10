@@ -276,8 +276,21 @@ class SupabaseDB:
             logger.error(f"Ошибка получения пользователей: {e}")
             return []
     
-    async def load_user_autostocks(self, user_id: int) -> Set[str]:
-        """ФИКС: Загрузка автостоков пользователя с использованием params"""
+    async def load_user_autostocks(self, user_id: int, use_cache: bool = True) -> Set[str]:
+        """
+        ОПТИМИЗАЦИЯ: Загрузка автостоков с кэшированием в памяти.
+        TTL = 60 сек: если юзер кликает быстро подряд, используем кэш.
+        При выключении кэша (use_cache=False) - свежие данные из БД.
+        """
+        # ОПТИМИЗАЦИЯ: Проверяем кэш
+        if use_cache and user_id in user_autostocks_cache:
+            cache_time = user_autostocks_time.get(user_id)
+            if cache_time:
+                now = get_moscow_time()
+                if (now - cache_time).total_seconds() < AUTOSTOCK_CACHE_TTL:
+                    logger.debug(f"💾 Использован кэш для {user_id}")
+                    return user_autostocks_cache[user_id].copy()
+        
         try:
             await self.init_session()
             params = {"user_id": f"eq.{user_id}", "select": "item_name"}
@@ -285,7 +298,14 @@ class SupabaseDB:
             async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return {item['item_name'] for item in data}
+                    items_set = {item['item_name'] for item in data}
+                    
+                    # ОПТИМИЗАЦИЯ: Обновляем кэш
+                    user_autostocks_cache[user_id] = items_set
+                    user_autostocks_time[user_id] = get_moscow_time()
+                    logger.debug(f"✅ Кэш обновлен для {user_id}: {len(items_set)} предметов")
+                    
+                    return items_set
                 return set()
         except Exception as e:
             logger.error(f"Ошибка загрузки автостоков: {e}")
@@ -794,7 +814,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await query.answer("❌ Нет доступного снаряжения", show_alert=True)
         
         elif data == "as_list":
-            user_items = await tracker.db.load_user_autostocks(user_id)
+            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             if not user_items:
                 message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_"
             else:
