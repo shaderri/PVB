@@ -89,10 +89,13 @@ ITEMS_DATA = {
     "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
+    "Bat": {"emoji": "🏏", "price": "Free", "category": "gear"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
+    "Lucky Potion": {"emoji": "🍀", "price": "TBD", "category": "gear"},
+    "Speed Potion": {"emoji": "⚡", "price": "TBD", "category": "gear"},
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
@@ -752,7 +755,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         if data == "as_seeds":
             # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
-            user_items = await tracker.db.load_user_autostocks(user_id)
+            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in SEED_ITEMS_LIST:
                 is_tracking = item_name in user_items
@@ -772,7 +775,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         elif data == "as_gear":
             # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
-            user_items = await tracker.db.load_user_autostocks(user_id)
+            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in GEAR_ITEMS_LIST:
                 is_tracking = item_name in user_items
