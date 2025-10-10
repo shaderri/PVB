@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 import logging
 import os
@@ -88,13 +89,10 @@ ITEMS_DATA = {
     "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
-    "Bat": {"emoji": "🏏", "price": "Free", "category": "gear"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
-    "Lucky Potion": {"emoji": "🍀", "price": "TBD", "category": "gear"},
-    "Speed Potion": {"emoji": "⚡", "price": "TBD", "category": "gear"},
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
