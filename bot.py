@@ -40,9 +40,9 @@ GEAR_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&
 WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
 
 CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 15
-COMMAND_COOLDOWN = 10
-STOCK_CACHE_SECONDS = 25
+CHECK_DELAY_SECONDS = 10
+COMMAND_COOLDOWN = 15
+STOCK_CACHE_SECONDS = 30
 
 # Состояния для рассылки
 BROADCAST_MESSAGE = 1
@@ -89,6 +89,7 @@ ITEMS_DATA = {
     "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
+    "King Limone": {"emoji": "🍋", "price": "$450m", "category": "seed"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
@@ -96,7 +97,7 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango"]
+NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango", "King Limone"]
 
 last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
