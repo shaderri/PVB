@@ -24,14 +24,13 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 # Admin ID
 ADMIN_ID = 7177110883
 
-# Supabase API - ВАШИ таблицы для автостоков и пользователей
+# Supabase API
 SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
 SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
 
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-# API для стока игры - оригинальный
 SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
 SUPABASE_API_KEY_STOCK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
 
@@ -44,7 +43,6 @@ CHECK_DELAY_SECONDS = 10
 COMMAND_COOLDOWN = 15
 STOCK_CACHE_SECONDS = 30
 
-# Состояния для рассылки
 BROADCAST_MESSAGE = 1
 
 if not BOT_TOKEN:
@@ -58,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 logger.info(f"🔗 Supabase (автостоки): {SUPABASE_URL_BASE}")
 logger.info(f"🔗 API стока: {SUPABASE_URL}")
-logger.info(f"🔑 API Key: {SUPABASE_API_KEY_STOCK[:20]}...")
 
 # Погода
 WEATHER_DATA = {
@@ -73,7 +70,6 @@ WEATHER_DATA = {
     "galaxy": {"emoji": "🌌", "name": "Галактика"}
 }
 
-# Предметы
 ITEMS_DATA = {
     "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed"},
     "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed"},
@@ -105,51 +101,34 @@ NOTIFICATION_COOLDOWN = 300
 
 user_cooldowns: Dict[int, Dict[str, datetime]] = {}
 
-# Кэш для стока
 stock_cache: Optional[Dict] = None
 stock_cache_time: Optional[datetime] = None
 
 telegram_app: Optional[Application] = None
 
-# ========== ФИКС: Маппинг для безопасных callback_data ==========
-# NAME_TO_ID: полное имя → безопасный ID (≤ 64 байта)
-# ID_TO_NAME: обратное маппирование
 NAME_TO_ID: Dict[str, str] = {}
 ID_TO_NAME: Dict[str, str] = {}
 
-# ========== ОПТИМИЗАЦИЯ: Кэш автостоков пользователей ==========
-# user_autostocks_cache: {user_id: {item_name1, item_name2, ...}}
-# user_autostocks_time: {user_id: datetime}
-# CACHE_TTL = 60 сек: если юзер не меняет предметы часто, избегаем лишних запросов
+# ОПТИМИЗАЦИЯ: Кэш с ограничением размера и автоочисткой
 user_autostocks_cache: Dict[int, Set[str]] = {}
 user_autostocks_time: Dict[int, datetime] = {}
-AUTOSTOCK_CACHE_TTL = 60  # 60 секунд TTL для кэша автостоков
+AUTOSTOCK_CACHE_TTL = 120  # 120 сек вместо 60
+MAX_CACHE_SIZE = 10000  # Максимум 10k пользователей в кэше
 
-# Предкэшированные клавиатуры по категориям (не перестраиваем каждый раз)
 SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
 GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
 
-# Кэш последней отправленной клавиатуры по пользователям
-# {(user_id, category): keyboard_json_str} для быстрого сравнения
 last_keyboard_cache: Dict[tuple, str] = {}
 
 
 def build_item_id_mappings():
-    """
-    ФИКС: Построить детерминированные безопасные ID для всех предметов.
-    Используем SHA1 hex (первые 8 символов) для уникальности.
-    Гарантирует, что ID никогда не превысит 64 байта и содержит только безопасные символы.
-    """
     global NAME_TO_ID, ID_TO_NAME
     NAME_TO_ID.clear()
     ID_TO_NAME.clear()
     
     for item_name in ITEMS_DATA.keys():
-        # Генерируем детерминированный ID на основе SHA1 хеша имени
         hash_obj = hashlib.sha1(item_name.encode('utf-8'))
         hash_hex = hash_obj.hexdigest()[:8]
-        
-        # Формируем безопасный ID: "t_<категория>_<хеш>"
         category = ITEMS_DATA[item_name]['category']
         safe_id = f"t_{category}_{hash_hex}"
         
@@ -160,15 +139,10 @@ def build_item_id_mappings():
 
 
 def get_moscow_time() -> datetime:
-    """Получить текущее московское время"""
     return datetime.now(pytz.timezone('Europe/Moscow'))
 
 
 def check_command_cooldown(user_id: int, command: str) -> tuple[bool, Optional[int]]:
-    """
-    Проверка cooldown команды для пользователя
-    Возвращает (можно_выполнить, секунд_осталось)
-    """
     if user_id not in user_cooldowns:
         user_cooldowns[user_id] = {}
     
@@ -186,7 +160,6 @@ def check_command_cooldown(user_id: int, command: str) -> tuple[bool, Optional[i
 
 
 async def check_subscription(user_id: int, bot: Bot) -> bool:
-    """Проверка подписки на обязательный канал"""
     try:
         member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
@@ -195,21 +168,16 @@ async def check_subscription(user_id: int, bot: Bot) -> bool:
 
 
 def get_next_check_time() -> datetime:
-    """Расчет времени следующей проверки"""
     now = get_moscow_time()
     current_minute = now.minute
-    current_second = now.second
     
-    # Проверяем каждые 5 минут в :15 секунд (0:15, 5:15, 10:15, и т.д.)
     next_minute = ((current_minute // CHECK_INTERVAL_MINUTES) + 1) * CHECK_INTERVAL_MINUTES
-    next_second = CHECK_DELAY_SECONDS
     
     if next_minute >= 60:
-        next_check = now.replace(minute=0, second=next_second, microsecond=0) + timedelta(hours=1)
+        next_check = now.replace(minute=0, second=CHECK_DELAY_SECONDS, microsecond=0) + timedelta(hours=1)
     else:
-        next_check = now.replace(minute=next_minute, second=next_second, microsecond=0)
+        next_check = now.replace(minute=next_minute, second=CHECK_DELAY_SECONDS, microsecond=0)
     
-    # ОПТИМИЗАЦИЯ: Если мы уже прошли секунду :15 в текущую минуту, переходим к следующему интервалу
     if next_check <= now:
         next_check += timedelta(minutes=CHECK_INTERVAL_MINUTES)
     
@@ -217,16 +185,32 @@ def get_next_check_time() -> datetime:
 
 
 def calculate_sleep_time() -> float:
-    """Расчет времени ожидания до следующей проверки"""
     next_check = get_next_check_time()
     now = get_moscow_time()
     sleep_seconds = (next_check - now).total_seconds()
     return max(sleep_seconds, 0)
 
 
-class SupabaseDB:
-    """Работа с Supabase для автостоков и пользователей"""
+def _cleanup_cache():
+    """ОПТИМИЗАЦИЯ: Очистить старые записи из кэша"""
+    global user_autostocks_cache, user_autostocks_time
     
+    if len(user_autostocks_cache) > MAX_CACHE_SIZE:
+        now = get_moscow_time()
+        # Удаляем записи старше 5 минут
+        to_delete = []
+        for user_id, cache_time in user_autostocks_time.items():
+            if (now - cache_time).total_seconds() > 300:
+                to_delete.append(user_id)
+        
+        for user_id in to_delete:
+            user_autostocks_cache.pop(user_id, None)
+            user_autostocks_time.pop(user_id, None)
+        
+        logger.info(f"♻️ Очищено {len(to_delete)} записей из кэша (осталось {len(user_autostocks_cache)})")
+
+
+class SupabaseDB:
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         self.headers = {
@@ -245,7 +229,6 @@ class SupabaseDB:
             await self.session.close()
     
     async def save_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None):
-        """Сохранение пользователя в БД"""
         try:
             await self.init_session()
             data = {
@@ -265,7 +248,6 @@ class SupabaseDB:
             return False
     
     async def get_all_users(self) -> List[int]:
-        """Получить всех пользователей бота"""
         try:
             await self.init_session()
             params = {"select": "user_id"}
@@ -280,18 +262,11 @@ class SupabaseDB:
             return []
     
     async def load_user_autostocks(self, user_id: int, use_cache: bool = True) -> Set[str]:
-        """
-        ОПТИМИЗАЦИЯ: Загрузка автостоков с кэшированием в памяти.
-        TTL = 60 сек: если юзер кликает быстро подряд, используем кэш.
-        При выключении кэша (use_cache=False) - свежие данные из БД.
-        """
-        # ОПТИМИЗАЦИЯ: Проверяем кэш
         if use_cache and user_id in user_autostocks_cache:
             cache_time = user_autostocks_time.get(user_id)
             if cache_time:
                 now = get_moscow_time()
                 if (now - cache_time).total_seconds() < AUTOSTOCK_CACHE_TTL:
-                    logger.debug(f"💾 Использован кэш для {user_id}")
                     return user_autostocks_cache[user_id].copy()
         
         try:
@@ -303,10 +278,8 @@ class SupabaseDB:
                     data = await response.json()
                     items_set = {item['item_name'] for item in data}
                     
-                    # ОПТИМИЗАЦИЯ: Обновляем кэш
                     user_autostocks_cache[user_id] = items_set
                     user_autostocks_time[user_id] = get_moscow_time()
-                    logger.debug(f"✅ Кэш обновлен для {user_id}: {len(items_set)} предметов")
                     
                     return items_set
                 return set()
@@ -315,11 +288,6 @@ class SupabaseDB:
             return set()
     
     async def save_user_autostock(self, user_id: int, item_name: str) -> bool:
-        """
-        ОПТИМИЗАЦИЯ: При сохранении, обновляем кэш локально без ожидания ответа.
-        Добавление в БД происходит асинхронно.
-        """
-        # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш
         if user_id not in user_autostocks_cache:
             user_autostocks_cache[user_id] = set()
         user_autostocks_cache[user_id].add(item_name)
@@ -330,19 +298,13 @@ class SupabaseDB:
             data = {"user_id": user_id, "item_name": item_name}
             
             async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
-                success = response.status in [200, 201]
                 logger.info(f"💾 Добавлен автосток '{item_name}' для {user_id}: {response.status}")
-                return success
+                return response.status in [200, 201]
         except Exception as e:
             logger.error(f"Ошибка сохранения автостока: {e}")
             return False
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
-        """
-        ОПТИМИЗАЦИЯ: При удалении, обновляем кэш локально без ожидания ответа.
-        Удаление из БД происходит асинхронно.
-        """
-        # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш
         if user_id in user_autostocks_cache:
             user_autostocks_cache[user_id].discard(item_name)
             user_autostocks_time[user_id] = get_moscow_time()
@@ -352,16 +314,13 @@ class SupabaseDB:
             params = {"user_id": f"eq.{user_id}", "item_name": f"eq.{item_name}"}
             
             async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
-                success = response.status in [200, 204]
-                status_text = await response.text()
-                logger.info(f"🗑️ Удален автосток '{item_name}' для {user_id}: {response.status} | {status_text[:100]}")
-                return success
+                logger.info(f"🗑️ Удален автосток '{item_name}' для {user_id}: {response.status}")
+                return response.status in [200, 204]
         except Exception as e:
             logger.error(f"Ошибка удаления автостока: {e}")
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        """ФИКС: Получить пользователей, отслеживающих предмет с использованием params"""
         try:
             await self.init_session()
             params = {"item_name": f"eq.{item_name}", "select": "user_id"}
@@ -392,7 +351,6 @@ class StockTracker:
         await self.db.close_session()
 
     async def fetch_supabase_api(self, url: str) -> Optional[List[Dict]]:
-        """Запрос к API стока"""
         try:
             await self.init_session()
             headers = {
@@ -400,42 +358,30 @@ class StockTracker:
                 "Authorization": f"Bearer {SUPABASE_API_KEY_STOCK}"
             }
             
-            logger.info(f"📡 Запрос стока: {url[:80]}...")
-            
             async with self.session.get(url, headers=headers, timeout=10) as response:
-                logger.info(f"📊 Ответ: {response.status}")
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"✅ Получено {len(data)} записей")
                     return data
-                else:
-                    text = await response.text()
-                    logger.error(f"❌ Ошибка {response.status}: {text[:200]}")
                 return None
         except Exception as e:
             logger.error(f"❌ Ошибка API стока: {e}")
             return None
 
     async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
-        """Получение стока с кэшированием"""
         global stock_cache, stock_cache_time
         
-        # Проверка кэша
         if use_cache and stock_cache and stock_cache_time:
             now = get_moscow_time()
             if (now - stock_cache_time).total_seconds() < STOCK_CACHE_SECONDS:
-                logger.info("💾 Используем кэш")
                 return stock_cache
         
         try:
-            logger.info("🔄 Загружаем новый сток")
             seeds_data, gear_data = await asyncio.gather(
                 self.fetch_supabase_api(SEEDS_API_URL),
                 self.fetch_supabase_api(GEAR_API_URL)
             )
             
             if seeds_data is None and gear_data is None:
-                logger.error("❌ Оба запроса вернули None")
                 return None
             
             combined_data = []
@@ -446,10 +392,8 @@ class StockTracker:
             
             result = {"data": combined_data}
             
-            # Обновляем кэш
             stock_cache = result
             stock_cache_time = get_moscow_time()
-            logger.info(f"✅ Кэш обновлен: {len(combined_data)} предметов")
             
             return result
         except Exception as e:
@@ -572,7 +516,7 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """Проверка автостоков пользователей"""
+        """ОПТИМИЗАЦИЯ: Отправляем уведомления с задержкой, а не все сразу"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -583,14 +527,18 @@ class StockTracker:
             if display_name and multiplier > 0:
                 current_stock[display_name] = multiplier
 
-        tasks = []
+        # ОПТИМИЗАЦИЯ: Отправляем по одному с задержкой, не параллельно
         for item_name, count in current_stock.items():
-            users = await self.db.get_users_tracking_item(item_name)
-            for user_id in users:
-                tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                users = await self.db.get_users_tracking_item(item_name)
+                for user_id in users:
+                    try:
+                        await self.send_autostock_notification(bot, user_id, item_name, count)
+                        await asyncio.sleep(0.02)  # Минимальная задержка между сообщениями
+                    except:
+                        pass
+            except:
+                pass
 
     async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
         try:
@@ -638,14 +586,12 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_id = update.effective_user.id
     
-    # Сохранить пользователя
     await tracker.db.save_user(
         user_id, 
         update.effective_user.username, 
         update.effective_user.first_name
     )
     
-    # Проверка cooldown
     can_execute, seconds_left = check_command_cooldown(user_id, 'stock')
     if not can_execute:
         await update.effective_message.reply_text(
@@ -653,7 +599,6 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Проверка подписки только в ЛС
     if update.effective_chat.type == ChatType.PRIVATE:
         if not await check_subscription(user_id, context.bot):
             keyboard = [[InlineKeyboardButton("📢 Подписаться", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")]]
@@ -741,17 +686,13 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
         "Выберите категорию предметов.\n"
-        "⏰ Проверка: каждые 5 минут в :15 секунд"
+        "⏰ Проверка: каждые 5 минут в :10 секунд"
     )
     
     await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 
 def _keyboard_to_str(keyboard: InlineKeyboardMarkup) -> str:
-    """
-    ОПТИМИЗАЦИЯ: Преобразует клавиатуру в строку для сравнения.
-    Используется для проверки: изменилась ли клавиатура с последнего раза.
-    """
     try:
         buttons_data = []
         for row in keyboard.inline_keyboard:
@@ -765,10 +706,6 @@ def _keyboard_to_str(keyboard: InlineKeyboardMarkup) -> str:
 
 
 async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    ФИКС: Обработка callbacks для автостоков с использованием безопасных ID.
-    ОПТИМИЗАЦИЯ: Кэширование автостоков юзера, быстрая переестройка клавиатуры.
-    """
     query = update.callback_query
     await query.answer()
     
@@ -777,7 +714,6 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         if data == "as_seeds":
-            # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in SEED_ITEMS_LIST:
@@ -793,11 +729,8 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             if keyboard and len(keyboard) > 0:
                 await query.edit_message_text("🌱 *СЕМЕНА*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-            else:
-                await query.answer("❌ Нет доступных семян", show_alert=True)
         
         elif data == "as_gear":
-            # ОПТИМИЗАЦИЯ: Используем кэшированный список предметов
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in GEAR_ITEMS_LIST:
@@ -813,8 +746,6 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             if keyboard and len(keyboard) > 0:
                 await query.edit_message_text("⚔️ *СНАРЯЖЕНИЕ*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-            else:
-                await query.answer("❌ Нет доступного снаряжения", show_alert=True)
         
         elif data == "as_list":
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
@@ -842,31 +773,21 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         
         elif data.startswith("t_"):
-            # ОПТИМИЗАЦИЯ: Немедленное обновление UI, БД в фоне
             item_name = ID_TO_NAME.get(data)
             if not item_name:
-                logger.error(f"❌ Неизвестный callback ID: {data}")
                 await query.answer("❌ Ошибка: предмет не найден", show_alert=True)
                 return
             
             category = ITEMS_DATA.get(item_name, {}).get('category', 'seed')
-            
-            # ОПТИМИЗАЦИЯ: Получаем кэшированные данные (без ожидания свежих с БД)
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             
-            # ОПТИМИЗАЦИЯ: Сразу обновляем локальный кэш и UI
             if item_name in user_items:
                 user_items.discard(item_name)
-                # Асинхронно удаляем из БД (не ждем ответ)
                 asyncio.create_task(tracker.db.remove_user_autostock(user_id, item_name))
-                logger.info(f"🗑️ Пользователь {user_id} удалил '{item_name}' из автостоков")
             else:
                 user_items.add(item_name)
-                # Асинхронно добавляем в БД (не ждем ответ)
                 asyncio.create_task(tracker.db.save_user_autostock(user_id, item_name))
-                logger.info(f"💾 Пользователь {user_id} добавил '{item_name}' в автостоки")
             
-            # ОПТИМИЗАЦИЯ: Быстро перестраиваем клавиатуру на основе локального кэша
             items_list = SEED_ITEMS_LIST if category == 'seed' else GEAR_ITEMS_LIST
             keyboard = []
             for name, info in items_list:
@@ -880,29 +801,18 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # ОПТИМИЗАЦИЯ: Сравниваем с последней отправленной клавиатурой
-            # Если идентична - не отправляем запрос, экономим время и трафик
             cache_key = (user_id, category)
             new_keyboard_str = _keyboard_to_str(reply_markup)
             old_keyboard_str = last_keyboard_cache.get(cache_key, "")
             
             if new_keyboard_str == old_keyboard_str:
-                logger.debug(f"⏭️ Клавиатура не изменилась, пропускаем обновление")
-                await query.answer()  # Просто ответим на callback, но не редактируем
                 return
             
-            # Обновляем кэш
             last_keyboard_cache[cache_key] = new_keyboard_str
             
             try:
-                if reply_markup.inline_keyboard and len(reply_markup.inline_keyboard) > 0:
-                    await query.edit_message_reply_markup(reply_markup=reply_markup)
-                    logger.debug(f"✅ Клавиатура обновлена мгновенно для {user_id}")
-                else:
-                    logger.warning(f"⚠️ Пустая клавиатура для пользователя {user_id}")
-                    await query.answer("⚠️ Ошибка обновления. Попробуйте снова.", show_alert=False)
-            except TelegramError as e:
-                logger.error(f"❌ Ошибка editMessageReplyMarkup: {e}")
+                await query.edit_message_reply_markup(reply_markup=reply_markup)
+            except TelegramError:
                 try:
                     category_text = "🌱 *СЕМЕНА*" if category == "seed" else "⚔️ *СНАРЯЖЕНИЕ*"
                     await query.edit_message_text(
@@ -910,26 +820,14 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
-                    logger.info(f"✅ Fallback: полное редактирование сообщения выполнено")
-                except TelegramError as e2:
-                    logger.error(f"❌ Fallback также не удался: {e2}")
-                    if "message to edit not found" in str(e2).lower():
-                        await query.answer("ℹ️ Сообщение было удалено. Используйте /autostock для начала.", show_alert=True)
-                    else:
-                        await query.answer(f"❌ Ошибка: {str(e2)[:50]}", show_alert=False)
+                except:
+                    pass
     
     except Exception as e:
-        logger.error(f"❌ Общая ошибка в autostock_callback: {e}", exc_info=True)
-        try:
-            await query.answer(f"❌ Произошла ошибка. Попробуйте снова.", show_alert=False)
-        except:
-            pass
+        logger.error(f"❌ Ошибка в autostock_callback: {e}", exc_info=True)
 
-
-# ============ ADMIN - BROADCAST ============
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для начала рассылки (только для админа)"""
     if not update.effective_user or not update.effective_message:
         return
     
@@ -954,7 +852,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение сообщения для рассылки"""
     if not update.effective_user or not update.effective_message or not update.message:
         return ConversationHandler.END
     
@@ -963,9 +860,8 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     if user_id != ADMIN_ID:
         return ConversationHandler.END
     
-    # ОПТИМИЗАЦИЯ: Сохраняем оригинальное сообщение с форматированием
     message_text = update.message.text or ""
-    message_html = update.message.text_html or message_text  # Если есть HTML форматирование
+    message_html = update.message.text_html or message_text
     
     keyboard = [
         [
@@ -975,7 +871,6 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # ОПТИМИЗАЦИЯ: Сохраняем оба варианта текста
     context.user_data['broadcast_text'] = message_text
     context.user_data['broadcast_html'] = message_html
     context.user_data['broadcast_entities'] = update.message.entities or []
@@ -991,7 +886,6 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
 
 
 async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка подтверждения рассылки"""
     query = update.callback_query
     await query.answer()
     
@@ -1028,8 +922,6 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         for user_id_to_send in users:
             try:
-                # ОПТИМИЗАЦИЯ: Если есть HTML форматирование (жирный текст и т.д.), отправляем с HTML
-                # Иначе отправляем обычный текст
                 if broadcast_entities:
                     await context.bot.send_message(
                         chat_id=user_id_to_send,
@@ -1043,10 +935,9 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         parse_mode=ParseMode.MARKDOWN
                     )
                 sent += 1
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.1)  # 100ms задержка между сообщениями
             except Exception as e:
                 failed += 1
-                logger.error(f"Ошибка отправки {user_id_to_send}: {e}")
         
         report = (
             f"✅ *РАССЫЛКА ЗАВЕРШЕНА*\n\n"
@@ -1061,7 +952,6 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена текущей операции"""
     if not update.effective_message:
         return ConversationHandler.END
     
@@ -1107,39 +997,52 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/weather - Погода в игре\n"
         "/autostock - Настроить автостоки (только в ЛС)\n"
         "/help - Справка\n\n"
-        "⏰ Проверка каждые 5 минут в :15 секунд\n"
+        "⏰ Проверка каждые 5 минут в :10 секунд\n"
         f"📢 Обязательная подписка: {REQUIRED_CHANNEL}"
     )
     await update.effective_message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
 
 
 async def periodic_stock_check(application: Application):
+    """ОПТИМИЗАЦИЯ: Улучшенная периодическая проверка с правильной остановкой"""
     if tracker.is_running:
         return
     
     tracker.is_running = True
     logger.info("🚀 Периодическая проверка запущена")
     
-    initial_sleep = calculate_sleep_time()
-    await asyncio.sleep(initial_sleep)
+    try:
+        initial_sleep = calculate_sleep_time()
+        await asyncio.sleep(initial_sleep)
 
-    while tracker.is_running:
-        try:
-            now = get_moscow_time()
-            logger.info(f"🔍 Проверка - {now.strftime('%H:%M:%S')}")
-            
-            stock_data = await tracker.fetch_stock(use_cache=False)
-            
-            if stock_data:
-                if CHANNEL_ID:
-                    await tracker.check_for_notifications(stock_data, application.bot, CHANNEL_ID)
-                await tracker.check_user_autostocks(stock_data, application.bot)
-            
-            sleep_time = calculate_sleep_time()
-            await asyncio.sleep(sleep_time)
-        except Exception as e:
-            logger.error(f"❌ Ошибка проверки: {e}")
-            await asyncio.sleep(calculate_sleep_time())
+        while tracker.is_running:
+            try:
+                now = get_moscow_time()
+                logger.info(f"🔍 Проверка - {now.strftime('%H:%M:%S')}")
+                
+                # Очистка кэша каждые 10 проверок
+                if int(now.timestamp()) % 100 == 0:
+                    _cleanup_cache()
+                
+                stock_data = await tracker.fetch_stock(use_cache=False)
+                
+                if stock_data:
+                    if CHANNEL_ID:
+                        await tracker.check_for_notifications(stock_data, application.bot, CHANNEL_ID)
+                    await tracker.check_user_autostocks(stock_data, application.bot)
+                
+                sleep_time = calculate_sleep_time()
+                await asyncio.sleep(sleep_time)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌ Ошибка проверки: {e}")
+                await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        tracker.is_running = False
+        logger.info("🛑 Периодическая проверка остановлена")
 
 
 async def post_init(application: Application):
@@ -1164,7 +1067,8 @@ def ping():
         "moscow_time": now.strftime("%H:%M:%S"),
         "next_check": next_check.strftime("%H:%M:%S"),
         "bot": "PVB Stock Tracker",
-        "is_running": tracker.is_running
+        "is_running": tracker.is_running,
+        "cache_size": len(user_autostocks_cache)
     }), 200
 
 
@@ -1178,7 +1082,6 @@ def main():
     logger.info("🌱 Plants vs Brainrots Stock Tracker Bot")
     logger.info("="*60)
 
-    # ФИКС: Построить маппинги безопасных ID при запуске
     build_item_id_mappings()
 
     global telegram_app
