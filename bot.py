@@ -238,13 +238,11 @@ class SupabaseDB:
             "Content-Type": "application/json",
             "Prefer": "return=minimal"
         }
-        self.connector = None
     
     async def init_session(self):
         if not self.session or self.session.closed:
-            if not self.connector:
-                self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            self.session = aiohttp.ClientSession(connector=self.connector)
+            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+            self.session = aiohttp.ClientSession(connector=connector)
     
     async def close_session(self):
         if self.session and not self.session.closed:
@@ -360,10 +358,12 @@ class StockTracker:
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_running = False
         self.db = SupabaseDB()
-        self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+        self.connector = None
 
     async def init_session(self):
         if not self.session or self.session.closed:
+            if not self.connector:
+                self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
             self.session = aiohttp.ClientSession(connector=self.connector)
 
     async def close_session(self):
