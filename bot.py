@@ -40,8 +40,8 @@ WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.we
 
 CHECK_INTERVAL_MINUTES = 5
 CHECK_DELAY_SECONDS = 10
-COMMAND_COOLDOWN = 15
-STOCK_CACHE_SECONDS = 30
+COMMAND_COOLDOWN = 10  # Уменьшен для быстроты
+STOCK_CACHE_SECONDS = 20  # Уменьшен для актуальности
 
 BROADCAST_MESSAGE = 1
 
@@ -53,9 +53,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-logger.info(f"🔗 Supabase (автостоки): {SUPABASE_URL_BASE}")
-logger.info(f"🔗 API стока: {SUPABASE_URL}")
 
 # Погода
 WEATHER_DATA = {
@@ -85,7 +82,7 @@ ITEMS_DATA = {
     "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
-    "King Limone": {"emoji": "🍋", "price": "$450m", "category": "seed"},
+    "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
@@ -109,16 +106,18 @@ telegram_app: Optional[Application] = None
 NAME_TO_ID: Dict[str, str] = {}
 ID_TO_NAME: Dict[str, str] = {}
 
-# ОПТИМИЗАЦИЯ: Кэш с ограничением размера и автоочисткой
 user_autostocks_cache: Dict[int, Set[str]] = {}
 user_autostocks_time: Dict[int, datetime] = {}
-AUTOSTOCK_CACHE_TTL = 120  # 120 сек вместо 60
-MAX_CACHE_SIZE = 10000  # Максимум 10k пользователей в кэше
+AUTOSTOCK_CACHE_TTL = 180
+MAX_CACHE_SIZE = 15000
 
 SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
 GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
 
 last_keyboard_cache: Dict[tuple, str] = {}
+
+subscription_cache: Dict[int, tuple[bool, datetime]] = {}
+SUBSCRIPTION_CACHE_TTL = 300
 
 
 def build_item_id_mappings():
@@ -134,8 +133,6 @@ def build_item_id_mappings():
         
         NAME_TO_ID[item_name] = safe_id
         ID_TO_NAME[safe_id] = item_name
-        
-    logger.info(f"✅ Построены маппинги: {len(NAME_TO_ID)} предметов")
 
 
 def get_moscow_time() -> datetime:
@@ -159,12 +156,29 @@ def check_command_cooldown(user_id: int, command: str) -> tuple[bool, Optional[i
     return True, None
 
 
-async def check_subscription(user_id: int, bot: Bot) -> bool:
+async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> bool:
+    if use_cache and user_id in subscription_cache:
+        is_subscribed, cache_time = subscription_cache[user_id]
+        now = get_moscow_time()
+        if (now - cache_time).total_seconds() < SUBSCRIPTION_CACHE_TTL:
+            return is_subscribed
+    
     try:
         member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
+        is_subscribed = member.status in ['member', 'administrator', 'creator']
+        subscription_cache[user_id] = (is_subscribed, get_moscow_time())
+        return is_subscribed
     except TelegramError:
+        subscription_cache[user_id] = (False, get_moscow_time())
         return False
+
+
+def get_subscription_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("📢 Подписаться на канал", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")],
+        [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def get_next_check_time() -> datetime:
@@ -192,22 +206,27 @@ def calculate_sleep_time() -> float:
 
 
 def _cleanup_cache():
-    """ОПТИМИЗАЦИЯ: Очистить старые записи из кэша"""
-    global user_autostocks_cache, user_autostocks_time
+    global user_autostocks_cache, user_autostocks_time, subscription_cache
+    
+    now = get_moscow_time()
     
     if len(user_autostocks_cache) > MAX_CACHE_SIZE:
-        now = get_moscow_time()
-        # Удаляем записи старше 5 минут
-        to_delete = []
-        for user_id, cache_time in user_autostocks_time.items():
-            if (now - cache_time).total_seconds() > 300:
-                to_delete.append(user_id)
+        to_delete = [uid for uid, ct in user_autostocks_time.items() 
+                     if (now - ct).total_seconds() > 600]
         
         for user_id in to_delete:
             user_autostocks_cache.pop(user_id, None)
             user_autostocks_time.pop(user_id, None)
         
-        logger.info(f"♻️ Очищено {len(to_delete)} записей из кэша (осталось {len(user_autostocks_cache)})")
+        if to_delete:
+            logger.info(f"♻️ Очищено {len(to_delete)} автостоков")
+    
+    if len(subscription_cache) > 5000:
+        to_delete = [uid for uid, (_, ct) in list(subscription_cache.items()) 
+                     if (now - ct).total_seconds() > 600]
+        
+        for user_id in to_delete:
+            subscription_cache.pop(user_id, None)
 
 
 class SupabaseDB:
@@ -219,10 +238,11 @@ class SupabaseDB:
             "Content-Type": "application/json",
             "Prefer": "return=minimal"
         }
+        self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
     
     async def init_session(self):
         if not self.session or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(connector=self.connector)
     
     async def close_session(self):
         if self.session and not self.session.closed:
@@ -298,7 +318,6 @@ class SupabaseDB:
             data = {"user_id": user_id, "item_name": item_name}
             
             async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
-                logger.info(f"💾 Добавлен автосток '{item_name}' для {user_id}: {response.status}")
                 return response.status in [200, 201]
         except Exception as e:
             logger.error(f"Ошибка сохранения автостока: {e}")
@@ -314,7 +333,6 @@ class SupabaseDB:
             params = {"user_id": f"eq.{user_id}", "item_name": f"eq.{item_name}"}
             
             async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
-                logger.info(f"🗑️ Удален автосток '{item_name}' для {user_id}: {response.status}")
                 return response.status in [200, 204]
         except Exception as e:
             logger.error(f"Ошибка удаления автостока: {e}")
@@ -340,10 +358,11 @@ class StockTracker:
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_running = False
         self.db = SupabaseDB()
+        self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
 
     async def init_session(self):
         if not self.session or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(connector=self.connector)
 
     async def close_session(self):
         if self.session and not self.session.closed:
@@ -360,11 +379,10 @@ class StockTracker:
             
             async with self.session.get(url, headers=headers, timeout=10) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data
+                    return await response.json()
                 return None
         except Exception as e:
-            logger.error(f"❌ Ошибка API стока: {e}")
+            logger.error(f"❌ Ошибка API: {e}")
             return None
 
     async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
@@ -380,9 +398,6 @@ class StockTracker:
                 self.fetch_supabase_api(SEEDS_API_URL),
                 self.fetch_supabase_api(GEAR_API_URL)
             )
-            
-            if seeds_data is None and gear_data is None:
-                return None
             
             combined_data = []
             if seeds_data:
@@ -516,7 +531,6 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """ОПТИМИЗАЦИЯ: Отправляем уведомления с задержкой, а не все сразу"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -527,18 +541,30 @@ class StockTracker:
             if display_name and multiplier > 0:
                 current_stock[display_name] = multiplier
 
-        # ОПТИМИЗАЦИЯ: Отправляем по одному с задержкой, не параллельно
+        item_users_map = {}
+        tasks = []
+        for item_name in current_stock.keys():
+            tasks.append(self.db.get_users_tracking_item(item_name))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for item_name, result in zip(current_stock.keys(), results):
+            if not isinstance(result, Exception) and result:
+                item_users_map[item_name] = result
+        
+        send_tasks = []
         for item_name, count in current_stock.items():
-            try:
-                users = await self.db.get_users_tracking_item(item_name)
-                for user_id in users:
-                    try:
-                        await self.send_autostock_notification(bot, user_id, item_name, count)
-                        await asyncio.sleep(0.02)  # Минимальная задержка между сообщениями
-                    except:
-                        pass
-            except:
-                pass
+            users = item_users_map.get(item_name, [])
+            for user_id in users:
+                send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+                
+                if len(send_tasks) >= 50:
+                    await asyncio.gather(*send_tasks, return_exceptions=True)
+                    send_tasks = []
+                    await asyncio.sleep(0.05)
+        
+        if send_tasks:
+            await asyncio.gather(*send_tasks, return_exceptions=True)
 
     async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
         try:
@@ -580,6 +606,33 @@ class StockTracker:
 tracker = StockTracker()
 
 
+async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    is_subscribed = await check_subscription(user_id, context.bot, use_cache=False)
+    
+    if is_subscribed:
+        await query.edit_message_text(
+            "✅ *ПОДПИСКА ПОДТВЕРЖДЕНА!*\n\n"
+            "Теперь вы можете пользоваться всеми функциями бота:\n\n"
+            "📊 /stock - Текущий сток\n"
+            "🌤️ /weather - Погода в игре\n"
+            "🔔 /autostock - Настроить автостоки\n"
+            "❓ /help - Справка",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await query.edit_message_text(
+            "❌ *ПОДПИСКА НЕ НАЙДЕНА*\n\n"
+            f"Пожалуйста, подпишитесь на канал {REQUIRED_CHANNEL} и нажмите кнопку ещё раз.",
+            reply_markup=get_subscription_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.effective_message:
         return
@@ -601,10 +654,11 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.effective_chat.type == ChatType.PRIVATE:
         if not await check_subscription(user_id, context.bot):
-            keyboard = [[InlineKeyboardButton("📢 Подписаться", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")]]
             await update.effective_message.reply_text(
-                f"⚠️ Для использования бота подпишитесь на {REQUIRED_CHANNEL}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                f"⚠️ *Для использования бота подпишитесь на канал*\n\n"
+                f"Канал: {REQUIRED_CHANNEL}",
+                reply_markup=get_subscription_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
             )
             return
     
@@ -634,10 +688,11 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.effective_chat.type == ChatType.PRIVATE:
         if not await check_subscription(user_id, context.bot):
-            keyboard = [[InlineKeyboardButton("📢 Подписаться", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")]]
             await update.effective_message.reply_text(
-                f"⚠️ Для использования бота подпишитесь на {REQUIRED_CHANNEL}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                f"⚠️ *Для использования бота подпишитесь на канал*\n\n"
+                f"Канал: {REQUIRED_CHANNEL}",
+                reply_markup=get_subscription_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
             )
             return
     
@@ -669,10 +724,11 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not await check_subscription(user_id, context.bot):
-        keyboard = [[InlineKeyboardButton("📢 Подписаться", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")]]
         await update.effective_message.reply_text(
-            f"⚠️ Для использования автостоков подпишитесь на {REQUIRED_CHANNEL}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"⚠️ *Для использования автостоков подпишитесь на канал*\n\n"
+            f"Канал: {REQUIRED_CHANNEL}",
+            reply_markup=get_subscription_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
         )
         return
 
@@ -685,8 +741,9 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message = (
         "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
-        "Выберите категорию предметов.\n"
-        "⏰ Проверка: каждые 5 минут в :10 секунд"
+        "Выберите категорию предметов для отслеживания.\n\n"
+        "⏰ Проверка стока: каждые 5 минут в :10 секунд\n"
+        "📬 Вы получите уведомление, когда предмет появится в стоке"
     )
     
     await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
@@ -721,14 +778,18 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 status = "✅" if is_tracking else "➕"
                 safe_callback = NAME_TO_ID.get(item_name, "invalid")
                 keyboard.append([InlineKeyboardButton(
-                    f"{status} {item_info['emoji']} {item_name}",
+                    f"{status} {item_info['emoji']} {item_name} - {item_info['price']}",
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            if keyboard and len(keyboard) > 0:
-                await query.edit_message_text("🌱 *СЕМЕНА*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(
+                "🌱 *СЕМЕНА*\n\n"
+                "Нажмите на предмет, чтобы добавить/убрать из автостоков:",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
         
         elif data == "as_gear":
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
@@ -738,25 +799,29 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 status = "✅" if is_tracking else "➕"
                 safe_callback = NAME_TO_ID.get(item_name, "invalid")
                 keyboard.append([InlineKeyboardButton(
-                    f"{status} {item_info['emoji']} {item_name}",
+                    f"{status} {item_info['emoji']} {item_name} - {item_info['price']}",
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            if keyboard and len(keyboard) > 0:
-                await query.edit_message_text("⚔️ *СНАРЯЖЕНИЕ*\n\nВыберите предметы:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(
+                "⚔️ *СНАРЯЖЕНИЕ*\n\n"
+                "Нажмите на предмет, чтобы добавить/убрать из автостоков:",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
         
         elif data == "as_list":
             user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
             if not user_items:
-                message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_"
+                message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_\n\nДобавьте предметы через кнопки ниже."
             else:
                 items_list = []
-                for item_name in user_items:
+                for item_name in sorted(user_items):
                     item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
                     items_list.append(f"{item_info['emoji']} *{item_name}* ({item_info['price']})")
-                message = f"📋 *МОИ АВТОСТОКИ*\n\n" + "\n".join(items_list)
+                message = f"📋 *МОИ АВТОСТОКИ* ({len(user_items)})\n\n" + "\n".join(items_list)
             
             keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="as_back")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -769,7 +834,10 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            message = "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\nВыберите категорию."
+            message = (
+                "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
+                "Выберите категорию предметов для отслеживания."
+            )
             await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         
         elif data.startswith("t_"):
@@ -784,9 +852,11 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if item_name in user_items:
                 user_items.discard(item_name)
                 asyncio.create_task(tracker.db.remove_user_autostock(user_id, item_name))
+                await query.answer(f"❌ {item_name} убран из автостоков", show_alert=False)
             else:
                 user_items.add(item_name)
                 asyncio.create_task(tracker.db.save_user_autostock(user_id, item_name))
+                await query.answer(f"✅ {item_name} добавлен в автостоки", show_alert=False)
             
             items_list = SEED_ITEMS_LIST if category == 'seed' else GEAR_ITEMS_LIST
             keyboard = []
@@ -795,7 +865,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 status = "✅" if is_tracking else "➕"
                 safe_callback = NAME_TO_ID.get(name, "invalid")
                 keyboard.append([InlineKeyboardButton(
-                    f"{status} {info['emoji']} {name}",
+                    f"{status} {info['emoji']} {name} - {info['price']}",
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
@@ -816,7 +886,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 try:
                     category_text = "🌱 *СЕМЕНА*" if category == "seed" else "⚔️ *СНАРЯЖЕНИЕ*"
                     await query.edit_message_text(
-                        f"{category_text}\n\nВыберите предметы:",
+                        f"{category_text}\n\nНажмите на предмет, чтобы добавить/убрать из автостоков:",
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
@@ -935,8 +1005,8 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         parse_mode=ParseMode.MARKDOWN
                     )
                 sent += 1
-                await asyncio.sleep(0.1)  # 100ms задержка между сообщениями
-            except Exception as e:
+                await asyncio.sleep(0.05)
+            except Exception:
                 failed += 1
         
         report = (
@@ -969,19 +1039,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update.effective_user.first_name
     )
     
-    channel_info = f"📢 Канал: {CHANNEL_ID}" if CHANNEL_ID else ""
+    channel_info = f"📢 Канал: {REQUIRED_CHANNEL}" if CHANNEL_ID else ""
     welcome_message = (
-        "👋 *Plants vs Brainrots Stock Tracker!*\n\n"
-        "📊 /stock - Текущий сток\n"
-        "🌤️ /weather - Погода в игре\n"
-        "🔔 /autostock - Автостоки\n"
-        "❓ /help - Справка\n\n"
-        f"{channel_info}\n"
-        "📦 *Редкие предметы:*\n"
-        "• 🥕 Mr Carrot\n"
-        "• 🍅 Tomatrio\n"
-        "• 🍄 Shroombino\n"
-        "• 🥭 Mango"
+        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*\n\n"
+        "🤖 Я помогу отслеживать сток предметов в игре:\n\n"
+        "📊 /stock - Посмотреть текущий сток\n"
+        "🌤️ /weather - Узнать погоду в игре\n"
+        "🔔 /autostock - Настроить автостоки (уведомления)\n"
+        "❓ /help - Получить справку\n\n"
+        f"{channel_info}\n\n"
+        "📦 *Редкие предметы с автоуведомлениями:*\n"
+        "• 🥕 Mr Carrot ($50m)\n"
+        "• 🍅 Tomatrio ($125m)\n"
+        "• 🍄 Shroombino ($200m)\n"
+        "• 🥭 Mango ($367m)\n"
+        "• 🍋 King Limone ($670m)"
     )
     await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
@@ -991,20 +1063,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     help_message = (
-        "📚 *КОМАНДЫ:*\n\n"
-        "/start - Информация\n"
-        "/stock - Текущий сток\n"
-        "/weather - Погода в игре\n"
-        "/autostock - Настроить автостоки (только в ЛС)\n"
-        "/help - Справка\n\n"
-        "⏰ Проверка каждые 5 минут в :10 секунд\n"
-        f"📢 Обязательная подписка: {REQUIRED_CHANNEL}"
+        "📚 *СПРАВКА ПО КОМАНДАМ:*\n\n"
+        "📊 /stock - Показать текущий сток предметов\n"
+        "🌤️ /weather - Узнать текущую погоду в игре\n"
+        "🔔 /autostock - Настроить автостоки (только в ЛС)\n"
+        "❓ /help - Показать эту справку\n"
+        "/start - Информация о боте\n\n"
+        "⏰ *Как работает бот:*\n"
+        "• Проверка стока каждые 5 минут в :10 секунд\n"
+        "• Автоматические уведомления при появлении предметов\n"
+        "• Кэширование данных для быстрой работы\n\n"
+        f"📢 *Важно:* Для использования бота нужна подписка на {REQUIRED_CHANNEL}\n\n"
+        "💡 *Совет:* Настройте автостоки для редких предметов, чтобы не пропустить их появление!"
     )
     await update.effective_message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
 
 
 async def periodic_stock_check(application: Application):
-    """ОПТИМИЗАЦИЯ: Улучшенная периодическая проверка с правильной остановкой"""
     if tracker.is_running:
         return
     
@@ -1013,30 +1088,39 @@ async def periodic_stock_check(application: Application):
     
     try:
         initial_sleep = calculate_sleep_time()
+        logger.info(f"⏰ Первая проверка через {int(initial_sleep)} сек")
         await asyncio.sleep(initial_sleep)
 
+        check_count = 0
         while tracker.is_running:
             try:
                 now = get_moscow_time()
-                logger.info(f"🔍 Проверка - {now.strftime('%H:%M:%S')}")
+                check_count += 1
+                logger.info(f"🔍 Проверка #{check_count} - {now.strftime('%H:%M:%S')}")
                 
-                # Очистка кэша каждые 10 проверок
-                if int(now.timestamp()) % 100 == 0:
+                if check_count % 12 == 0:
                     _cleanup_cache()
                 
                 stock_data = await tracker.fetch_stock(use_cache=False)
                 
                 if stock_data:
+                    tasks = []
                     if CHANNEL_ID:
-                        await tracker.check_for_notifications(stock_data, application.bot, CHANNEL_ID)
-                    await tracker.check_user_autostocks(stock_data, application.bot)
+                        tasks.append(tracker.check_for_notifications(stock_data, application.bot, CHANNEL_ID))
+                    tasks.append(tracker.check_user_autostocks(stock_data, application.bot))
+                    
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    logger.info(f"✅ Проверка #{check_count} завершена успешно")
+                else:
+                    logger.warning(f"⚠️ Проверка #{check_count}: нет данных")
                 
                 sleep_time = calculate_sleep_time()
+                logger.info(f"😴 Следующая проверка через {int(sleep_time)} сек")
                 await asyncio.sleep(sleep_time)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"❌ Ошибка проверки: {e}")
+                logger.error(f"❌ Ошибка проверки #{check_count}: {e}", exc_info=True)
                 await asyncio.sleep(60)
     except asyncio.CancelledError:
         pass
@@ -1066,9 +1150,10 @@ def ping():
         "time": datetime.utcnow().isoformat() + "Z",
         "moscow_time": now.strftime("%H:%M:%S"),
         "next_check": next_check.strftime("%H:%M:%S"),
-        "bot": "PVB Stock Tracker",
+        "bot": "PVB Stock Tracker v2.0",
         "is_running": tracker.is_running,
-        "cache_size": len(user_autostocks_cache)
+        "cache_size": len(user_autostocks_cache),
+        "subscription_cache": len(subscription_cache)
     }), 200
 
 
@@ -1079,7 +1164,7 @@ def health():
 
 def main():
     logger.info("="*60)
-    logger.info("🌱 Plants vs Brainrots Stock Tracker Bot")
+    logger.info("🌱 Plants vs Brainrots Stock Tracker Bot v2.0")
     logger.info("="*60)
 
     build_item_id_mappings()
@@ -1102,6 +1187,7 @@ def main():
     )
     telegram_app.add_handler(broadcast_handler)
     
+    telegram_app.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="^check_subscription$"))
     telegram_app.add_handler(CallbackQueryHandler(autostock_callback, pattern="^as_|^t_"))
     telegram_app.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^bc_"))
 
@@ -1132,8 +1218,10 @@ def main():
     flask_thread = threading.Thread(target=run_flask_server, daemon=True)
     flask_thread.start()
     
-    logger.info("🚀 Бот запущен!")
+    logger.info("🚀 Бот запущен успешно!")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
+    logger.info(f"📢 Канал: {REQUIRED_CHANNEL}")
+    logger.info(f"⏰ Интервал проверки: каждые {CHECK_INTERVAL_MINUTES} минут")
     logger.info("="*60)
     telegram_app.run_polling(allowed_updates=None, drop_pending_updates=True)
 
