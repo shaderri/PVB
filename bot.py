@@ -40,8 +40,8 @@ WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.we
 
 CHECK_INTERVAL_MINUTES = 5
 CHECK_DELAY_SECONDS = 10
-COMMAND_COOLDOWN = 10  # Уменьшен для быстроты
-STOCK_CACHE_SECONDS = 20  # Уменьшен для актуальности
+COMMAND_COOLDOWN = 10
+STOCK_CACHE_SECONDS = 20
 
 BROADCAST_MESSAGE = 1
 
@@ -95,6 +95,10 @@ NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango", "King Limo
 last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
 NOTIFICATION_COOLDOWN = 300
+
+# ИСПРАВЛЕНИЕ: Отдельное отслеживание для автостоков пользователей
+last_autostock_notification: Dict[str, datetime] = {}
+AUTOSTOCK_NOTIFICATION_COOLDOWN = 300  # 5 минут между уведомлениями одного и того же предмета
 
 user_cooldowns: Dict[int, Dict[str, datetime]] = {}
 
@@ -358,13 +362,11 @@ class StockTracker:
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_running = False
         self.db = SupabaseDB()
-        self.connector = None
 
     async def init_session(self):
         if not self.session or self.session.closed:
-            if not self.connector:
-                self.connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            self.session = aiohttp.ClientSession(connector=self.connector)
+            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+            self.session = aiohttp.ClientSession(connector=connector)
 
     async def close_session(self):
         if self.session and not self.session.closed:
@@ -507,6 +509,15 @@ class StockTracker:
         last_time = last_notification_time[item_name]
         return (now - last_time).total_seconds() >= NOTIFICATION_COOLDOWN
 
+    def can_send_autostock_notification(self, item_name: str) -> bool:
+        """ИСПРАВЛЕНИЕ: Отдельная проверка кулдауна для автостоков"""
+        if item_name not in last_autostock_notification:
+            return True
+        
+        now = get_moscow_time()
+        last_time = last_autostock_notification[item_name]
+        return (now - last_time).total_seconds() >= AUTOSTOCK_NOTIFICATION_COOLDOWN
+
     async def check_for_notifications(self, stock_data: Dict, bot: Bot, channel_id: str):
         global last_stock_state
         if not stock_data or 'data' not in stock_data or not channel_id:
@@ -533,6 +544,7 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
+        """ИСПРАВЛЕНИЕ: Отправляем уведомления всем пользователям если предмет есть в стоке"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -543,30 +555,39 @@ class StockTracker:
             if display_name and multiplier > 0:
                 current_stock[display_name] = multiplier
 
-        item_users_map = {}
-        tasks = []
-        for item_name in current_stock.keys():
-            tasks.append(self.db.get_users_tracking_item(item_name))
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for item_name, result in zip(current_stock.keys(), results):
-            if not isinstance(result, Exception) and result:
-                item_users_map[item_name] = result
-        
-        send_tasks = []
+        # Для каждого предмета в стоке проверяем кулдаун и отправляем уведомления
         for item_name, count in current_stock.items():
-            users = item_users_map.get(item_name, [])
-            for user_id in users:
-                send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+            # Проверяем кулдаун для этого предмета
+            if not self.can_send_autostock_notification(item_name):
+                continue
+            
+            # Получаем пользователей
+            try:
+                users = await self.db.get_users_tracking_item(item_name)
+                if not users:
+                    continue
                 
-                if len(send_tasks) >= 50:
+                logger.info(f"📬 Отправка автостоков для {item_name}: {len(users)} пользователей")
+                
+                # Обновляем время последнего уведомления
+                last_autostock_notification[item_name] = get_moscow_time()
+                
+                # Отправляем батчами
+                send_tasks = []
+                for user_id in users:
+                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+                    
+                    if len(send_tasks) >= 50:
+                        await asyncio.gather(*send_tasks, return_exceptions=True)
+                        send_tasks = []
+                        await asyncio.sleep(0.05)
+                
+                if send_tasks:
                     await asyncio.gather(*send_tasks, return_exceptions=True)
-                    send_tasks = []
-                    await asyncio.sleep(0.05)
-        
-        if send_tasks:
-            await asyncio.gather(*send_tasks, return_exceptions=True)
+                
+                logger.info(f"✅ Автостоки для {item_name} отправлены")
+            except Exception as e:
+                logger.error(f"❌ Ошибка отправки автостоков для {item_name}: {e}")
 
     async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
         try:
@@ -583,9 +604,9 @@ class StockTracker:
 
             await bot.send_message(chat_id=channel_id, text=message, parse_mode=ParseMode.MARKDOWN)
             last_notification_time[item_name] = get_moscow_time()
-            logger.info(f"✅ Уведомление: {item_name} x{count}")
+            logger.info(f"✅ Уведомление в канал: {item_name} x{count}")
         except Exception as e:
-            logger.error(f"❌ Ошибка отправки: {e}")
+            logger.error(f"❌ Ошибка отправки в канал: {e}")
 
     async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int):
         try:
