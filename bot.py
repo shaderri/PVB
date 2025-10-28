@@ -544,7 +544,7 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """ИСПРАВЛЕНИЕ: Отправляем уведомления всем пользователям если предмет есть в стоке"""
+        """ИСПРАВЛЕНИЕ: Каждый предмет обрабатывается независимо с индивидуальным кулдауном"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -555,37 +555,43 @@ class StockTracker:
             if display_name and multiplier > 0:
                 current_stock[display_name] = multiplier
 
-        # Для каждого предмета в стоке проверяем кулдаун и отправляем уведомления
+        # Обрабатываем каждый предмет независимо
         for item_name, count in current_stock.items():
-            # Проверяем кулдаун для этого предмета
-            if not self.can_send_autostock_notification(item_name):
-                continue
-            
-            # Получаем пользователей
             try:
+                # Проверяем кулдаун для конкретного предмета
+                if not self.can_send_autostock_notification(item_name):
+                    logger.info(f"⏳ {item_name}: кулдаун активен, пропускаем")
+                    continue
+                
+                # Получаем пользователей для этого предмета
                 users = await self.db.get_users_tracking_item(item_name)
                 if not users:
                     continue
                 
                 logger.info(f"📬 Отправка автостоков для {item_name}: {len(users)} пользователей")
                 
-                # Обновляем время последнего уведомления
+                # ВАЖНО: Обновляем время ДО отправки, чтобы избежать дублей
                 last_autostock_notification[item_name] = get_moscow_time()
                 
-                # Отправляем батчами
+                # Отправляем уведомления батчами
                 send_tasks = []
+                sent_count = 0
+                
                 for user_id in users:
                     send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
                     
                     if len(send_tasks) >= 50:
-                        await asyncio.gather(*send_tasks, return_exceptions=True)
+                        results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                        sent_count += sum(1 for r in results if not isinstance(r, Exception))
                         send_tasks = []
                         await asyncio.sleep(0.05)
                 
                 if send_tasks:
-                    await asyncio.gather(*send_tasks, return_exceptions=True)
+                    results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                    sent_count += sum(1 for r in results if not isinstance(r, Exception))
                 
-                logger.info(f"✅ Автостоки для {item_name} отправлены")
+                logger.info(f"✅ {item_name}: отправлено {sent_count}/{len(users)} уведомлений")
+                
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки автостоков для {item_name}: {e}")
 
@@ -609,6 +615,7 @@ class StockTracker:
             logger.error(f"❌ Ошибка отправки в канал: {e}")
 
     async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int):
+        """Отправка автосток уведомления с возвратом результата"""
         try:
             item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
             current_time = get_moscow_time().strftime("%H:%M:%S")
@@ -622,8 +629,10 @@ class StockTracker:
             )
 
             await bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.MARKDOWN)
-        except:
-            pass
+            return True
+        except Exception as e:
+            logger.debug(f"Не удалось отправить {item_name} пользователю {user_id}: {e}")
+            return False
 
 
 tracker = StockTracker()
