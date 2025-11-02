@@ -696,10 +696,9 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
             "Теперь вы можете пользоваться всеми функциями бота:\n\n"
             "📊 /stock - Текущий сток\n"
             "🌤️ /weather - Погода в игре\n"
-            "🔔 /autostock - Настроить автостоки\n"
-            "❓ /help - Справка",
+            "🔔 /autostock - Настроить автостоки\n",
             parse_mode=ParseMode.MARKDOWN
-        )
+            )
     else:
         await query.edit_message_text(
             "❌ *ПОДПИСКА НЕ НАЙДЕНА*\n\n"
@@ -818,8 +817,7 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = (
         "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
         "Выберите категорию предметов для отслеживания.\n\n"
-        "⏰ Проверка стока: каждые 5 минут в :10 секунд\n"
-        "📬 Вы получите уведомление, когда предмет появится в стоке"
+        "💡 Вы получите мгновенное уведомление, когда выбранный предмет появится в стоке!"
     )
     
     await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
@@ -1122,45 +1120,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 /stock - Посмотреть текущий сток\n"
         "🌤️ /weather - Узнать погоду в игре\n"
         "🔔 /autostock - Настроить автостоки (уведомления)\n"
-        "❓ /help - Получить справку\n\n"
         f"{channel_info}\n\n"
-        "📦 *Редкие предметы с автоуведомлениями:*\n"
-        "• 🥕 Mr Carrot ($50m)\n"
-        "• 🍅 Tomatrio ($125m)\n"
-        "• 🍄 Shroombino ($200m)\n"
-        "• 🥭 Mango ($367m)\n"
-        "• 🍋 King Limone ($670m)"
     )
     await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message:
-        return
-    
-    help_message = (
-        "📚 *СПРАВКА ПО КОМАНДАМ:*\n\n"
-        "📊 /stock - Показать текущий сток предметов\n"
-        "🌤️ /weather - Узнать текущую погоду в игре\n"
-        "🔔 /autostock - Настроить автостоки (только в ЛС)\n"
-        "❓ /help - Показать эту справку\n"
-        "/start - Информация о боте\n\n"
-        "⏰ *Как работает бот:*\n"
-        "• Проверка стока каждые 5 минут в :10 секунд\n"
-        "• Автоматические уведомления при появлении предметов\n"
-        "• Кэширование данных для быстрой работы\n\n"
-        f"📢 *Важно:* Для использования бота нужна подписка на {REQUIRED_CHANNEL}\n\n"
-        "💡 *Совет:* Настройте автостоки для редких предметов, чтобы не пропустить их появление!"
-    )
-    await update.effective_message.reply_text(help_message, parse_mode=ParseMode.MARKDOWN)
-
-
 async def periodic_stock_check(application: Application):
+    """ОПТИМИЗАЦИЯ: Защита от падений с автоматическим перезапуском"""
     if tracker.is_running:
         return
     
     tracker.is_running = True
     logger.info("🚀 Периодическая проверка запущена")
+    
+    consecutive_errors = 0
+    max_consecutive_errors = 5
     
     try:
         initial_sleep = calculate_sleep_time()
@@ -1187,19 +1160,36 @@ async def periodic_stock_check(application: Application):
                     
                     await asyncio.gather(*tasks, return_exceptions=True)
                     logger.info(f"✅ Проверка #{check_count} завершена успешно")
+                    consecutive_errors = 0  # Сбрасываем счетчик ошибок
                 else:
                     logger.warning(f"⚠️ Проверка #{check_count}: нет данных")
+                    consecutive_errors += 1
+                
+                # Если слишком много ошибок подряд - перезапускаем сессии
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"🔄 {consecutive_errors} ошибок подряд - перезапуск сессий")
+                    try:
+                        await tracker.close_session()
+                        await asyncio.sleep(5)
+                        await tracker.init_session()
+                        consecutive_errors = 0
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка перезапуска сессий: {e}")
                 
                 sleep_time = calculate_sleep_time()
                 logger.info(f"😴 Следующая проверка через {int(sleep_time)} сек")
                 await asyncio.sleep(sleep_time)
+                
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                consecutive_errors += 1
                 logger.error(f"❌ Ошибка проверки #{check_count}: {e}", exc_info=True)
                 await asyncio.sleep(60)
     except asyncio.CancelledError:
         pass
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка в periodic_stock_check: {e}", exc_info=True)
     finally:
         tracker.is_running = False
         logger.info("🛑 Периодическая проверка остановлена")
@@ -1252,7 +1242,6 @@ def main():
     telegram_app.add_handler(CommandHandler("stock", stock_command))
     telegram_app.add_handler(CommandHandler("weather", weather_command))
     telegram_app.add_handler(CommandHandler("autostock", autostock_command))
-    telegram_app.add_handler(CommandHandler("help", help_command))
     
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_command)],
