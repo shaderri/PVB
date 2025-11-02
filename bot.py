@@ -83,6 +83,7 @@ ITEMS_DATA = {
     "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
     "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
+    "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
@@ -90,15 +91,15 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango", "King Limone"]
+NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
 
 last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
 NOTIFICATION_COOLDOWN = 300
 
-# ИСПРАВЛЕНИЕ: Отдельное отслеживание для автостоков пользователей
-last_autostock_notification: Dict[str, datetime] = {}
-AUTOSTOCK_NOTIFICATION_COOLDOWN = 300  # 5 минут между уведомлениями одного и того же предмета
+# ИСПРАВЛЕНИЕ: Убираем отдельный кулдаун для автостоков - используем общую логику
+user_sent_notifications: Dict[int, Dict[str, datetime]] = {}  # {user_id: {item_name: last_sent_time}}
+USER_NOTIFICATION_COOLDOWN = 300  # 5 минут между повторными уведомлениями одного предмета одному юзеру
 
 user_cooldowns: Dict[int, Dict[str, datetime]] = {}
 
@@ -210,7 +211,7 @@ def calculate_sleep_time() -> float:
 
 
 def _cleanup_cache():
-    global user_autostocks_cache, user_autostocks_time, subscription_cache
+    global user_autostocks_cache, user_autostocks_time, subscription_cache, user_sent_notifications
     
     now = get_moscow_time()
     
@@ -231,6 +232,23 @@ def _cleanup_cache():
         
         for user_id in to_delete:
             subscription_cache.pop(user_id, None)
+    
+    # Очистка старых записей отправленных уведомлений (старше 10 минут)
+    if len(user_sent_notifications) > 10000:
+        to_delete = []
+        for user_id, items_dict in list(user_sent_notifications.items()):
+            old_items = [item for item, sent_time in items_dict.items() 
+                        if (now - sent_time).total_seconds() > 600]
+            for item in old_items:
+                items_dict.pop(item, None)
+            if not items_dict:
+                to_delete.append(user_id)
+        
+        for user_id in to_delete:
+            user_sent_notifications.pop(user_id, None)
+        
+        if to_delete:
+            logger.info(f"♻️ Очищено {len(to_delete)} записей уведомлений")
 
 
 class SupabaseDB:
@@ -510,13 +528,20 @@ class StockTracker:
         return (now - last_time).total_seconds() >= NOTIFICATION_COOLDOWN
 
     def can_send_autostock_notification(self, item_name: str) -> bool:
-        """ИСПРАВЛЕНИЕ: Отдельная проверка кулдауна для автостоков"""
-        if item_name not in last_autostock_notification:
+        """УДАЛЕНО: теперь проверяем индивидуально для каждого юзера"""
+        return True
+    
+    def can_send_to_user(self, user_id: int, item_name: str) -> bool:
+        """НОВОЕ: проверка может ли конкретный пользователь получить уведомление"""
+        if user_id not in user_sent_notifications:
+            return True
+        
+        if item_name not in user_sent_notifications[user_id]:
             return True
         
         now = get_moscow_time()
-        last_time = last_autostock_notification[item_name]
-        return (now - last_time).total_seconds() >= AUTOSTOCK_NOTIFICATION_COOLDOWN
+        last_time = user_sent_notifications[user_id][item_name]
+        return (now - last_time).total_seconds() >= USER_NOTIFICATION_COOLDOWN
 
     async def check_for_notifications(self, stock_data: Dict, bot: Bot, channel_id: str):
         global last_stock_state
@@ -544,7 +569,7 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """ИСПРАВЛЕНИЕ: Каждый предмет обрабатывается независимо с индивидуальным кулдауном"""
+        """ИСПРАВЛЕНИЕ: Персональный кулдаун для каждого пользователя"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -555,45 +580,58 @@ class StockTracker:
             if display_name and multiplier > 0:
                 current_stock[display_name] = multiplier
 
-        # Обрабатываем каждый предмет независимо
+        if not current_stock:
+            return
+
+        # Собираем всех пользователей для всех предметов
+        all_tasks = []
+        item_names = list(current_stock.keys())
+        
+        for item_name in item_names:
+            all_tasks.append(self.db.get_users_tracking_item(item_name))
+        
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+        
+        # Создаем мапу предмет -> список пользователей
+        item_users_map = {}
+        for item_name, result in zip(item_names, results):
+            if not isinstance(result, Exception) and result:
+                item_users_map[item_name] = result
+        
+        # Отправляем уведомления
         for item_name, count in current_stock.items():
-            try:
-                # Проверяем кулдаун для конкретного предмета
-                if not self.can_send_autostock_notification(item_name):
-                    logger.info(f"⏳ {item_name}: кулдаун активен, пропускаем")
+            users = item_users_map.get(item_name, [])
+            if not users:
+                continue
+            
+            logger.info(f"📬 {item_name}: обработка {len(users)} пользователей")
+            
+            send_tasks = []
+            sent_count = 0
+            skipped_count = 0
+            
+            for user_id in users:
+                # КРИТИЧНО: проверяем персональный кулдаун для каждого юзера
+                if not self.can_send_to_user(user_id, item_name):
+                    skipped_count += 1
                     continue
                 
-                # Получаем пользователей для этого предмета
-                users = await self.db.get_users_tracking_item(item_name)
-                if not users:
-                    continue
+                send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
                 
-                logger.info(f"📬 Отправка автостоков для {item_name}: {len(users)} пользователей")
-                
-                # ВАЖНО: Обновляем время ДО отправки, чтобы избежать дублей
-                last_autostock_notification[item_name] = get_moscow_time()
-                
-                # Отправляем уведомления батчами
-                send_tasks = []
-                sent_count = 0
-                
-                for user_id in users:
-                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
-                    
-                    if len(send_tasks) >= 50:
-                        results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                        sent_count += sum(1 for r in results if not isinstance(r, Exception))
-                        send_tasks = []
-                        await asyncio.sleep(0.05)
-                
-                if send_tasks:
+                if len(send_tasks) >= 50:
                     results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                    sent_count += sum(1 for r in results if not isinstance(r, Exception))
-                
-                logger.info(f"✅ {item_name}: отправлено {sent_count}/{len(users)} уведомлений")
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка отправки автостоков для {item_name}: {e}")
+                    sent_count += sum(1 for r in results if r is True)
+                    send_tasks = []
+                    await asyncio.sleep(0.03)
+            
+            if send_tasks:
+                results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                sent_count += sum(1 for r in results if r is True)
+            
+            if sent_count > 0 or skipped_count > 0:
+                logger.info(f"✅ {item_name}: отправлено {sent_count}, пропущено {skipped_count}")
+            
+            await asyncio.sleep(0.01)
 
     async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
         try:
@@ -615,7 +653,7 @@ class StockTracker:
             logger.error(f"❌ Ошибка отправки в канал: {e}")
 
     async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int):
-        """Отправка автосток уведомления с возвратом результата"""
+        """Отправка автосток уведомления с записью времени отправки"""
         try:
             item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
             current_time = get_moscow_time().strftime("%H:%M:%S")
@@ -629,6 +667,12 @@ class StockTracker:
             )
 
             await bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.MARKDOWN)
+            
+            # Записываем время успешной отправки
+            if user_id not in user_sent_notifications:
+                user_sent_notifications[user_id] = {}
+            user_sent_notifications[user_id][item_name] = get_moscow_time()
+            
             return True
         except Exception as e:
             logger.debug(f"Не удалось отправить {item_name} пользователю {user_id}: {e}")
