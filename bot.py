@@ -91,7 +91,7 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-NOTIFICATION_ITEMS = ["Mr Carrot", "Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
+NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
 
 last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
