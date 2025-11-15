@@ -24,22 +24,22 @@ REQUIRED_CHANNEL = "@PlantsVsBrain"
 # Admin ID
 ADMIN_ID = 7177110883
 
-# Supabase API
+# Мой Supabase для пользователей и автостоков
 SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
 SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
 
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
-SUPABASE_API_KEY_STOCK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
+# Новый быстрый API для стока
+STOCK_API_URL = "https://plantsvsbrainrotsstocktracker.com/api/stock?since=0"
 
-SEEDS_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
-GEAR_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
-WEATHER_API_URL = f"{SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
+# Сторонний Supabase API для погоды (НЕ МОЙ)
+WEATHER_API_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
+WEATHER_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
 
 CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 18
+CHECK_DELAY_SECONDS = 10
 COMMAND_COOLDOWN = 10
 STOCK_CACHE_SECONDS = 20
 
@@ -68,28 +68,39 @@ WEATHER_DATA = {
 }
 
 ITEMS_DATA = {
-    "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed"},
-    "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed"},
-    "Pumpkin": {"emoji": "🎃", "price": "$5,000", "category": "seed"},
-    "Sunflower": {"emoji": "🌻", "price": "$25,000", "category": "seed"},
-    "Dragon Fruit": {"emoji": "🐉", "price": "$100k", "category": "seed"},
-    "Eggplant": {"emoji": "🍆", "price": "$250k", "category": "seed"},
-    "Watermelon": {"emoji": "🍉", "price": "$1m", "category": "seed"},
-    "Grape": {"emoji": "🍇", "price": "$2.5m", "category": "seed"},
-    "Cocotank": {"emoji": "🥥", "price": "$5m", "category": "seed"},
-    "Carnivorous Plant": {"emoji": "🪴", "price": "$25m", "category": "seed"},
-    "Mr Carrot": {"emoji": "🥕", "price": "$50m", "category": "seed"},
-    "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
-    "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
-    "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
-    "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
-    "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed"},
-    "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
-    "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
-    "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
-    "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
-    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
+    "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed", "api_id": "seed-cactus-seed"},
+    "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed", "api_id": "seed-strawberry-seed"},
+    "Pumpkin": {"emoji": "🎃", "price": "$5,000", "category": "seed", "api_id": "seed-pumpkin-seed"},
+    "Sunflower": {"emoji": "🌻", "price": "$25,000", "category": "seed", "api_id": "seed-sunflower-seed"},
+    "Dragon Fruit": {"emoji": "🐉", "price": "$100k", "category": "seed", "api_id": "seed-dragon-fruit-seed"},
+    "Eggplant": {"emoji": "🍆", "price": "$250k", "category": "seed", "api_id": "seed-eggplant-seed"},
+    "Watermelon": {"emoji": "🍉", "price": "$1m", "category": "seed", "api_id": "seed-watermelon-seed"},
+    "Grape": {"emoji": "🍇", "price": "$2.5m", "category": "seed", "api_id": "seed-grape-seed"},
+    "Cocotank": {"emoji": "🥥", "price": "$5m", "category": "seed", "api_id": "seed-cocotank-seed"},
+    "Carnivorous Plant": {"emoji": "🪴", "price": "$25m", "category": "seed", "api_id": "seed-carnivorous-plant-seed"},
+    "Mr Carrot": {"emoji": "🥕", "price": "$50m", "category": "seed", "api_id": "seed-mr-carrot-seed"},
+    "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed", "api_id": "seed-tomatrio-seed"},
+    "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed", "api_id": "seed-shroombino-seed"},
+    "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed", "api_id": "seed-mango-seed"},
+    "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed", "api_id": "seed-king-limone-seed"},
+    "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed", "api_id": "seed-starfruit-seed"},
+    "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear", "api_id": "gear-water-bucket"},
+    "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear", "api_id": "gear-frost-grenade"},
+    "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear", "api_id": "gear-banana-gun"},
+    "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear", "api_id": "gear-frost-blower"},
+    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear", "api_id": "gear-carrot-launcher"}
 }
+
+# Маппинг API ID -> Display Name
+API_ID_TO_NAME: Dict[str, str] = {}
+
+def build_api_id_mapping():
+    global API_ID_TO_NAME
+    API_ID_TO_NAME.clear()
+    for item_name, item_info in ITEMS_DATA.items():
+        api_id = item_info.get('api_id')
+        if api_id:
+            API_ID_TO_NAME[api_id] = item_name
 
 NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
 
@@ -97,9 +108,12 @@ last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
 NOTIFICATION_COOLDOWN = 300
 
-# ИСПРАВЛЕНИЕ: Убираем отдельный кулдаун для автостоков - используем общую логику
+# ИСПРАВЛЕНИЕ: Глобальный кулдаун для предмета + индивидуальный для пользователя
+item_last_seen: Dict[str, datetime] = {}  # {item_name: last_time_item_appeared}
+ITEM_COOLDOWN = 120  # 2 минуты глобальный кулдаун на предмет
+
 user_sent_notifications: Dict[int, Dict[str, datetime]] = {}  # {user_id: {item_name: last_sent_time}}
-USER_NOTIFICATION_COOLDOWN = 300  # 5 минут между повторными уведомлениями одного предмета одному юзеру
+USER_NOTIFICATION_COOLDOWN = 180  # 3 минуты между повторными уведомлениями одного предмета одному юзеру
 
 user_cooldowns: Dict[int, Dict[str, datetime]] = {}
 
@@ -124,6 +138,9 @@ last_keyboard_cache: Dict[tuple, str] = {}
 subscription_cache: Dict[int, tuple[bool, datetime]] = {}
 SUBSCRIPTION_CACHE_TTL = 300
 
+# НОВОЕ: Статистика для диагностики
+notification_stats: Dict[str, Dict] = {}  # {item_name: {sent: 0, skipped: 0, errors: 0}}
+
 
 def build_item_id_mappings():
     global NAME_TO_ID, ID_TO_NAME
@@ -138,6 +155,9 @@ def build_item_id_mappings():
         
         NAME_TO_ID[item_name] = safe_id
         ID_TO_NAME[safe_id] = item_name
+    
+    # Также строим маппинг API ID
+    build_api_id_mapping()
 
 
 def get_moscow_time() -> datetime:
@@ -212,6 +232,7 @@ def calculate_sleep_time() -> float:
 
 def _cleanup_cache():
     global user_autostocks_cache, user_autostocks_time, subscription_cache, user_sent_notifications
+    global item_last_seen, notification_stats
     
     now = get_moscow_time()
     
@@ -249,6 +270,12 @@ def _cleanup_cache():
         
         if to_delete:
             logger.info(f"♻️ Очищено {len(to_delete)} записей уведомлений")
+    
+    # Очистка item_last_seen (старше 10 минут)
+    old_items = [item for item, time in list(item_last_seen.items()) 
+                if (now - time).total_seconds() > 600]
+    for item in old_items:
+        item_last_seen.pop(item, None)
 
 
 class SupabaseDB:
@@ -264,7 +291,8 @@ class SupabaseDB:
     async def init_session(self):
         if not self.session or self.session.closed:
             connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            self.session = aiohttp.ClientSession(connector=connector)
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
     
     async def close_session(self):
         if self.session and not self.session.closed:
@@ -361,18 +389,29 @@ class SupabaseDB:
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        try:
-            await self.init_session()
-            params = {"item_name": f"eq.{item_name}", "select": "user_id"}
-            
-            async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return [item['user_id'] for item in data]
-                return []
-        except Exception as e:
-            logger.error(f"Ошибка получения пользователей: {e}")
-            return []
+        """УЛУЧШЕНО: Более надежное получение пользователей с retry"""
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                await self.init_session()
+                params = {"item_name": f"eq.{item_name}", "select": "user_id"}
+                
+                async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        users = [item['user_id'] for item in data]
+                        return users
+                    elif attempt < max_retries - 1:
+                        await asyncio.sleep(1)
+                        continue
+                    return []
+            except Exception as e:
+                logger.error(f"Ошибка получения пользователей для {item_name} (попытка {attempt+1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                else:
+                    return []
+        return []
 
 
 class StockTracker:
@@ -384,28 +423,45 @@ class StockTracker:
     async def init_session(self):
         if not self.session or self.session.closed:
             connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            self.session = aiohttp.ClientSession(connector=connector)
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 
     async def close_session(self):
         if self.session and not self.session.closed:
             await self.session.close()
         await self.db.close_session()
 
-    async def fetch_supabase_api(self, url: str) -> Optional[List[Dict]]:
-        try:
-            await self.init_session()
-            headers = {
-                "apikey": SUPABASE_API_KEY_STOCK,
-                "Authorization": f"Bearer {SUPABASE_API_KEY_STOCK}"
-            }
-            
-            async with self.session.get(url, headers=headers, timeout=10) as response:
-                if response.status == 200:
-                    return await response.json()
-                return None
-        except Exception as e:
-            logger.error(f"❌ Ошибка API: {e}")
-            return None
+    async def fetch_supabase_api(self, url: str) -> Optional[Dict]:
+        """УЛУЧШЕНО: Работа с новым быстрым API"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                await self.init_session()
+                
+                async with self.session.get(url, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data
+                    elif attempt < max_retries - 1:
+                        logger.warning(f"API вернул {response.status}, повтор через 2 сек...")
+                        await asyncio.sleep(2)
+                        continue
+                    else:
+                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток")
+                        return None
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Timeout при запросе к API (попытка {attempt+1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    return None
+            except Exception as e:
+                logger.error(f"❌ Ошибка API (попытка {attempt+1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    return None
+        return None
 
     async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
         global stock_cache, stock_cache_time
@@ -416,32 +472,61 @@ class StockTracker:
                 return stock_cache
         
         try:
-            seeds_data, gear_data = await asyncio.gather(
-                self.fetch_supabase_api(SEEDS_API_URL),
-                self.fetch_supabase_api(GEAR_API_URL)
-            )
+            # Используем новый быстрый API
+            data = await self.fetch_supabase_api(STOCK_API_URL)
             
-            combined_data = []
-            if seeds_data:
-                combined_data.extend(seeds_data)
-            if gear_data:
-                combined_data.extend(gear_data)
+            if not data or 'items' not in data:
+                logger.error("❌ Некорректный формат данных от API")
+                return None
             
-            result = {"data": combined_data}
+            # Преобразуем API формат в наш внутренний формат
+            result = {"data": [], "updatedAt": data.get('updatedAt', 0)}
+            
+            for item in data['items']:
+                api_id = item.get('id', '')
+                display_name = API_ID_TO_NAME.get(api_id)
+                
+                # Если не нашли в маппинге, используем имя из API
+                if not display_name:
+                    # Пытаемся получить из name
+                    raw_name = item.get('name', '')
+                    # Убираем " Seed" из названия для семян
+                    display_name = raw_name.replace(' Seed', '') if ' Seed' in raw_name else raw_name
+                
+                stock = item.get('currentStock', 0)
+                category = item.get('category', 'seed')
+                
+                if display_name and stock > 0:
+                    result['data'].append({
+                        'display_name': display_name,
+                        'multiplier': stock,
+                        'type': 'seeds' if category == 'seed' else 'gear',
+                        'api_id': api_id
+                    })
             
             stock_cache = result
             stock_cache_time = get_moscow_time()
             
+            logger.info(f"✅ Загружено {len(result['data'])} предметов из стока")
             return result
         except Exception as e:
-            logger.error(f"❌ Ошибка fetch_stock: {e}")
+            logger.error(f"❌ Ошибка fetch_stock: {e}", exc_info=True)
             return None
 
     async def fetch_weather(self) -> Optional[Dict]:
+        """Получение погоды из стороннего API (НЕ из моего Supabase)"""
         try:
-            weather_data = await self.fetch_supabase_api(WEATHER_API_URL)
-            if weather_data and len(weather_data) > 0:
-                return weather_data[0]
+            await self.init_session()
+            headers = {
+                "apikey": WEATHER_API_KEY,
+                "Authorization": f"Bearer {WEATHER_API_KEY}"
+            }
+            
+            async with self.session.get(WEATHER_API_URL, headers=headers, timeout=10) as response:
+                if response.status == 200:
+                    weather_data = await response.json()
+                    if weather_data and len(weather_data) > 0:
+                        return weather_data[0]
             return None
         except Exception as e:
             logger.error(f"❌ Ошибка fetch_weather: {e}")
@@ -527,12 +612,17 @@ class StockTracker:
         last_time = last_notification_time[item_name]
         return (now - last_time).total_seconds() >= NOTIFICATION_COOLDOWN
 
-    def can_send_autostock_notification(self, item_name: str) -> bool:
-        """УДАЛЕНО: теперь проверяем индивидуально для каждого юзера"""
-        return True
+    def should_notify_item(self, item_name: str) -> bool:
+        """НОВОЕ: Проверка глобального кулдауна предмета"""
+        if item_name not in item_last_seen:
+            return True
+        
+        now = get_moscow_time()
+        last_time = item_last_seen[item_name]
+        return (now - last_time).total_seconds() >= ITEM_COOLDOWN
     
     def can_send_to_user(self, user_id: int, item_name: str) -> bool:
-        """НОВОЕ: проверка может ли конкретный пользователь получить уведомление"""
+        """Проверка может ли конкретный пользователь получить уведомление"""
         if user_id not in user_sent_notifications:
             return True
         
@@ -569,7 +659,7 @@ class StockTracker:
         last_stock_state = current_stock.copy()
 
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """ИСПРАВЛЕНИЕ: Персональный кулдаун для каждого пользователя"""
+        """ИСПРАВЛЕНО: Улучшенная логика с параллельной загрузкой и пакетной отправкой"""
         if not stock_data or 'data' not in stock_data:
             return
 
@@ -581,57 +671,87 @@ class StockTracker:
                 current_stock[display_name] = multiplier
 
         if not current_stock:
+            logger.info("📭 Нет предметов в стоке для уведомлений")
             return
 
-        # Собираем всех пользователей для всех предметов
-        all_tasks = []
+        logger.info(f"📦 Найдено {len(current_stock)} предметов в стоке: {list(current_stock.keys())}")
+
+        # КРИТИЧНО: Параллельная загрузка всех пользователей для всех предметов
         item_names = list(current_stock.keys())
         
-        for item_name in item_names:
-            all_tasks.append(self.db.get_users_tracking_item(item_name))
-        
-        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+        # Загружаем всех пользователей параллельно
+        user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
+        users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
         
         # Создаем мапу предмет -> список пользователей
         item_users_map = {}
-        for item_name, result in zip(item_names, results):
-            if not isinstance(result, Exception) and result:
+        for item_name, result in zip(item_names, users_results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ Ошибка загрузки пользователей для {item_name}: {result}")
+                continue
+            if result:
                 item_users_map[item_name] = result
-        
-        # Отправляем уведомления
+                logger.info(f"👥 {item_name}: найдено {len(result)} пользователей")
+
+        # Обрабатываем каждый предмет
         for item_name, count in current_stock.items():
+            # Проверяем глобальный кулдаун предмета
+            if not self.should_notify_item(item_name):
+                logger.debug(f"⏸️ {item_name}: глобальный кулдаун активен")
+                continue
+            
             users = item_users_map.get(item_name, [])
             if not users:
                 continue
             
-            logger.info(f"📬 {item_name}: обработка {len(users)} пользователей")
+            # Инициализируем статистику
+            if item_name not in notification_stats:
+                notification_stats[item_name] = {"sent": 0, "skipped": 0, "errors": 0}
             
-            send_tasks = []
+            logger.info(f"🔔 {item_name}: начинаем отправку {len(users)} пользователям")
+            
+            # Обновляем время последнего появления предмета
+            item_last_seen[item_name] = get_moscow_time()
+            
             sent_count = 0
             skipped_count = 0
+            error_count = 0
             
-            for user_id in users:
-                # КРИТИЧНО: проверяем персональный кулдаун для каждого юзера
-                if not self.can_send_to_user(user_id, item_name):
-                    skipped_count += 1
-                    continue
+            # Отправляем пакетами по 30 пользователей
+            batch_size = 30
+            for i in range(0, len(users), batch_size):
+                batch = users[i:i + batch_size]
+                send_tasks = []
                 
-                send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+                for user_id in batch:
+                    # Проверяем персональный кулдаун
+                    if not self.can_send_to_user(user_id, item_name):
+                        skipped_count += 1
+                        notification_stats[item_name]["skipped"] += 1
+                        continue
+                    
+                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
                 
-                if len(send_tasks) >= 50:
+                # Отправляем пакет
+                if send_tasks:
                     results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                    sent_count += sum(1 for r in results if r is True)
-                    send_tasks = []
-                    await asyncio.sleep(0.03)
+                    
+                    for result in results:
+                        if result is True:
+                            sent_count += 1
+                            notification_stats[item_name]["sent"] += 1
+                        elif isinstance(result, Exception):
+                            error_count += 1
+                            notification_stats[item_name]["errors"] += 1
+                    
+                    # Небольшая задержка между пакетами
+                    if i + batch_size < len(users):
+                        await asyncio.sleep(0.05)
             
-            if send_tasks:
-                results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                sent_count += sum(1 for r in results if r is True)
+            logger.info(f"✅ {item_name}: отправлено {sent_count}, пропущено {skipped_count}, ошибок {error_count}")
             
-            if sent_count > 0 or skipped_count > 0:
-                logger.info(f"✅ {item_name}: отправлено {sent_count}, пропущено {skipped_count}")
-            
-            await asyncio.sleep(0.01)
+            # Небольшая задержка между предметами
+            await asyncio.sleep(0.02)
 
     async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
         try:
@@ -652,7 +772,7 @@ class StockTracker:
         except Exception as e:
             logger.error(f"❌ Ошибка отправки в канал: {e}")
 
-    async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int):
+    async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int) -> bool:
         """Отправка автосток уведомления с записью времени отправки"""
         try:
             item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
@@ -674,8 +794,15 @@ class StockTracker:
             user_sent_notifications[user_id][item_name] = get_moscow_time()
             
             return True
+        except TelegramError as e:
+            # Подробное логирование ошибок Telegram
+            if "Forbidden" in str(e) or "blocked" in str(e).lower():
+                logger.debug(f"🚫 Пользователь {user_id} заблокировал бота")
+            else:
+                logger.debug(f"⚠️ Не удалось отправить {item_name} пользователю {user_id}: {e}")
+            return False
         except Exception as e:
-            logger.debug(f"Не удалось отправить {item_name} пользователю {user_id}: {e}")
+            logger.error(f"❌ Ошибка отправки {item_name} пользователю {user_id}: {e}")
             return False
 
 
@@ -821,6 +948,44 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+
+
+# НОВАЯ КОМАНДА: Статистика для админа
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.effective_message:
+        return
+    
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        return
+    
+    global notification_stats, item_last_seen, user_sent_notifications
+    
+    stats_text = "📊 *СТАТИСТИКА УВЕДОМЛЕНИЙ*\n\n"
+    
+    if notification_stats:
+        stats_text += "*По предметам:*\n"
+        for item_name, stats in sorted(notification_stats.items()):
+            stats_text += f"• {item_name}: ✅{stats['sent']} ⏸️{stats['skipped']} ❌{stats['errors']}\n"
+    else:
+        stats_text += "_Нет данных по уведомлениям_\n"
+    
+    stats_text += f"\n*Кэши:*\n"
+    stats_text += f"• Автостоки: {len(user_autostocks_cache)} пользователей\n"
+    stats_text += f"• Подписки: {len(subscription_cache)} записей\n"
+    stats_text += f"• Уведомления: {len(user_sent_notifications)} пользователей\n"
+    stats_text += f"• Последние предметы: {len(item_last_seen)}\n"
+    
+    stats_text += f"\n*Система:*\n"
+    stats_text += f"• Бот работает: {'✅' if tracker.is_running else '❌'}\n"
+    
+    now = get_moscow_time()
+    next_check = get_next_check_time()
+    time_until = int((next_check - now).total_seconds())
+    stats_text += f"• След. проверка: через {time_until} сек\n"
+    
+    await update.effective_message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
 
 
 def _keyboard_to_str(keyboard: InlineKeyboardMarkup) -> str:
@@ -1242,6 +1407,7 @@ def main():
     telegram_app.add_handler(CommandHandler("stock", stock_command))
     telegram_app.add_handler(CommandHandler("weather", weather_command))
     telegram_app.add_handler(CommandHandler("autostock", autostock_command))
+    telegram_app.add_handler(CommandHandler("stats", stats_command))
     
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_command)],
