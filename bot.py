@@ -442,16 +442,26 @@ class StockTracker:
                 ts = int(time.time() * 1000)
                 url_with_ts = f"{url}?ts={ts}"
                 
-                async with self.session.get(url_with_ts, timeout=15) as response:
+                # Добавляем заголовки как у браузера
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Referer': 'https://plantsvsbrainrot.com/'
+                }
+                
+                async with self.session.get(url_with_ts, headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
                         return data
                     elif attempt < max_retries - 1:
-                        logger.warning(f"API вернул {response.status}, повтор через 2 сек...")
+                        logger.warning(f"API вернул {response.status}, повтор через 2 сек... URL: {url_with_ts}")
                         await asyncio.sleep(2)
                         continue
                     else:
-                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток")
+                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток. URL: {url_with_ts}")
                         return None
             except asyncio.TimeoutError:
                 logger.error(f"❌ Timeout при запросе к API (попытка {attempt+1}/{max_retries})")
