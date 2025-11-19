@@ -31,15 +31,14 @@ SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVC
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-# Новый быстрый API для стока
-STOCK_API_URL = "https://plantsvsbrainrotsstocktracker.com/api/stock?since=0"
+# Новый API для стока
+STOCK_API_URL = "https://plantsvsbrainrot.com/api/seed-shop.php"
 
-# Сторонний Supabase API для погоды (НЕ МОЙ)
-WEATHER_API_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
-WEATHER_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
+# Новый API для погоды
+WEATHER_API_URL = "https://plantsvsbrainrot.com/api/weather.php"
 
 CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 10
+CHECK_DELAY_SECONDS = 15
 COMMAND_COOLDOWN = 10
 STOCK_CACHE_SECONDS = 20
 
@@ -68,39 +67,42 @@ WEATHER_DATA = {
 }
 
 ITEMS_DATA = {
-    "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed", "api_id": "seed-cactus-seed"},
-    "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed", "api_id": "seed-strawberry-seed"},
-    "Pumpkin": {"emoji": "🎃", "price": "$5,000", "category": "seed", "api_id": "seed-pumpkin-seed"},
-    "Sunflower": {"emoji": "🌻", "price": "$25,000", "category": "seed", "api_id": "seed-sunflower-seed"},
-    "Dragon Fruit": {"emoji": "🐉", "price": "$100k", "category": "seed", "api_id": "seed-dragon-fruit-seed"},
-    "Eggplant": {"emoji": "🍆", "price": "$250k", "category": "seed", "api_id": "seed-eggplant-seed"},
-    "Watermelon": {"emoji": "🍉", "price": "$1m", "category": "seed", "api_id": "seed-watermelon-seed"},
-    "Grape": {"emoji": "🍇", "price": "$2.5m", "category": "seed", "api_id": "seed-grape-seed"},
-    "Cocotank": {"emoji": "🥥", "price": "$5m", "category": "seed", "api_id": "seed-cocotank-seed"},
-    "Carnivorous Plant": {"emoji": "🪴", "price": "$25m", "category": "seed", "api_id": "seed-carnivorous-plant-seed"},
-    "Mr Carrot": {"emoji": "🥕", "price": "$50m", "category": "seed", "api_id": "seed-mr-carrot-seed"},
-    "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed", "api_id": "seed-tomatrio-seed"},
-    "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed", "api_id": "seed-shroombino-seed"},
-    "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed", "api_id": "seed-mango-seed"},
-    "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed", "api_id": "seed-king-limone-seed"},
-    "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed", "api_id": "seed-starfruit-seed"},
-    "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear", "api_id": "gear-water-bucket"},
-    "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear", "api_id": "gear-frost-grenade"},
-    "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear", "api_id": "gear-banana-gun"},
-    "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear", "api_id": "gear-frost-blower"},
-    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear", "api_id": "gear-carrot-launcher"}
+    "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed"},
+    "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed"},
+    "Pumpkin": {"emoji": "🎃", "price": "$5,000", "category": "seed"},
+    "Sunflower": {"emoji": "🌻", "price": "$25,000", "category": "seed"},
+    "Dragon Fruit": {"emoji": "🐉", "price": "$100k", "category": "seed"},
+    "Eggplant": {"emoji": "🍆", "price": "$250k", "category": "seed"},
+    "Watermelon": {"emoji": "🍉", "price": "$1m", "category": "seed"},
+    "Grape": {"emoji": "🍇", "price": "$2.5m", "category": "seed"},
+    "Cocotank": {"emoji": "🥥", "price": "$5m", "category": "seed"},
+    "Carnivorous Plant": {"emoji": "🪴", "price": "$25m", "category": "seed"},
+    "Mr Carrot": {"emoji": "🥕", "price": "$50m", "category": "seed"},
+    "Tomatrio": {"emoji": "🍅", "price": "$125m", "category": "seed"},
+    "Shroombino": {"emoji": "🍄", "price": "$200m", "category": "seed"},
+    "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
+    "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
+    "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed"},
+    "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
+    "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
+    "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
+    "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
+    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-# Маппинг API ID -> Display Name
-API_ID_TO_NAME: Dict[str, str] = {}
-
-def build_api_id_mapping():
-    global API_ID_TO_NAME
-    API_ID_TO_NAME.clear()
-    for item_name, item_info in ITEMS_DATA.items():
-        api_id = item_info.get('api_id')
-        if api_id:
-            API_ID_TO_NAME[api_id] = item_name
+def build_item_id_mappings():
+    global NAME_TO_ID, ID_TO_NAME
+    NAME_TO_ID.clear()
+    ID_TO_NAME.clear()
+    
+    for item_name in ITEMS_DATA.keys():
+        hash_obj = hashlib.sha1(item_name.encode('utf-8'))
+        hash_hex = hash_obj.hexdigest()[:8]
+        category = ITEMS_DATA[item_name]['category']
+        safe_id = f"t_{category}_{hash_hex}"
+        
+        NAME_TO_ID[item_name] = safe_id
+        ID_TO_NAME[safe_id] = item_name
 
 NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
 
@@ -155,9 +157,6 @@ def build_item_id_mappings():
         
         NAME_TO_ID[item_name] = safe_id
         ID_TO_NAME[safe_id] = item_name
-    
-    # Также строим маппинг API ID
-    build_api_id_mapping()
 
 
 def get_moscow_time() -> datetime:
@@ -432,13 +431,18 @@ class StockTracker:
         await self.db.close_session()
 
     async def fetch_supabase_api(self, url: str) -> Optional[Dict]:
-        """УЛУЧШЕНО: Работа с новым быстрым API"""
+        """Работа с новым API"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 await self.init_session()
                 
-                async with self.session.get(url, timeout=15) as response:
+                # Добавляем timestamp для обхода кэша
+                import time
+                ts = int(time.time() * 1000)
+                url_with_ts = f"{url}?ts={ts}"
+                
+                async with self.session.get(url_with_ts, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
                         return data
@@ -472,36 +476,44 @@ class StockTracker:
                 return stock_cache
         
         try:
-            # Используем новый быстрый API
+            # Используем новый API
             data = await self.fetch_supabase_api(STOCK_API_URL)
             
-            if not data or 'items' not in data:
-                logger.error("❌ Некорректный формат данных от API")
+            if not data:
+                logger.error("❌ Нет данных от API")
                 return None
             
-            # Преобразуем API формат в наш внутренний формат
-            result = {"data": [], "updatedAt": data.get('updatedAt', 0)}
+            # Преобразуем новый формат в наш внутренний формат
+            result = {"data": [], "reportedAt": data.get('reportedAt', 0)}
             
-            for item in data['items']:
-                api_id = item.get('id', '')
-                display_name = API_ID_TO_NAME.get(api_id)
+            # Обрабатываем seeds
+            seeds = data.get('seeds', [])
+            for item in seeds:
+                name = item.get('name', '')
+                qty = item.get('qty', 0)
+                emoji = item.get('emoji', '📦')
                 
-                # Если не нашли в маппинге, используем имя из API
-                if not display_name:
-                    # Пытаемся получить из name
-                    raw_name = item.get('name', '')
-                    # Убираем " Seed" из названия для семян
-                    display_name = raw_name.replace(' Seed', '') if ' Seed' in raw_name else raw_name
-                
-                stock = item.get('currentStock', 0)
-                category = item.get('category', 'seed')
-                
-                if display_name and stock > 0:
+                if name and qty > 0:
                     result['data'].append({
-                        'display_name': display_name,
-                        'multiplier': stock,
-                        'type': 'seeds' if category == 'seed' else 'gear',
-                        'api_id': api_id
+                        'display_name': name,
+                        'multiplier': qty,
+                        'type': 'seeds',
+                        'emoji': emoji
+                    })
+            
+            # Обрабатываем gear
+            gear = data.get('gear', [])
+            for item in gear:
+                name = item.get('name', '')
+                qty = item.get('qty', 0)
+                emoji = item.get('emoji', '⚔️')
+                
+                if name and qty > 0:
+                    result['data'].append({
+                        'display_name': name,
+                        'multiplier': qty,
+                        'type': 'gear',
+                        'emoji': emoji
                     })
             
             stock_cache = result
@@ -514,52 +526,63 @@ class StockTracker:
             return None
 
     async def fetch_weather(self) -> Optional[Dict]:
-        """Получение погоды из стороннего API (НЕ из моего Supabase)"""
+        """Получение погоды из нового API"""
         try:
             await self.init_session()
-            headers = {
-                "apikey": WEATHER_API_KEY,
-                "Authorization": f"Bearer {WEATHER_API_KEY}"
-            }
             
-            async with self.session.get(WEATHER_API_URL, headers=headers, timeout=10) as response:
+            # Добавляем timestamp для обхода кэша
+            import time
+            ts = int(time.time() * 1000)
+            url_with_ts = f"{WEATHER_API_URL}?ts={ts}"
+            
+            async with self.session.get(url_with_ts, timeout=10) as response:
                 if response.status == 200:
                     weather_data = await response.json()
-                    if weather_data and len(weather_data) > 0:
-                        return weather_data[0]
+                    
+                    # Проверяем активна ли погода
+                    if weather_data and weather_data.get('active'):
+                        return weather_data
+                    return None
             return None
         except Exception as e:
             logger.error(f"❌ Ошибка fetch_weather: {e}")
             return None
 
     def format_weather_message(self, weather_data: Optional[Dict]) -> str:
-        if not weather_data:
+        if not weather_data or not weather_data.get('active'):
             return "🌤️ *ПОГОДА В ИГРЕ*\n\n_Сейчас обычная погода_"
         
-        weather_id = weather_data.get('item_id', '')
-        ends_at_str = weather_data.get('ends_at', '')
+        weather_name = weather_data.get('name', '').lower()
+        start_timestamp = weather_data.get('start')
         
-        weather_info = WEATHER_DATA.get(weather_id, {"emoji": "🌤️", "name": "Неизвестная"})
+        # Получаем эмодзи из справочника, имя берем как есть из API
+        weather_info = WEATHER_DATA.get(weather_name, {"emoji": "🌤️"})
         emoji = weather_info['emoji']
-        name = weather_info['name']
+        # Используем имя из API с заглавной буквы
+        name = weather_data.get('name', 'Unknown').capitalize()
         
         try:
             current_time = get_moscow_time()
             
-            if ends_at_str:
-                ends_at = datetime.fromisoformat(ends_at_str.replace('Z', '+00:00'))
-                ends_at_msk = ends_at.astimezone(pytz.timezone('Europe/Moscow'))
+            # Вычисляем время окончания (start + 3 минуты)
+            if start_timestamp:
+                start_time = datetime.fromtimestamp(start_timestamp / 1000, tz=pytz.timezone('Europe/Moscow'))
+                ends_at_msk = start_time + timedelta(minutes=3)
                 
                 if ends_at_msk > current_time:
                     time_left = ends_at_msk - current_time
-                    minutes_left = int(time_left.total_seconds() / 60)
+                    seconds_left = int(time_left.total_seconds())
+                    minutes_left = seconds_left // 60
+                    secs_remainder = seconds_left % 60
                     ends_time = ends_at_msk.strftime("%H:%M")
+                    
+                    time_str = f"{minutes_left} мин {secs_remainder} сек" if minutes_left > 0 else f"{secs_remainder} сек"
                     
                     return (
                         f"🌤️ *ПОГОДА В ИГРЕ*\n\n"
                         f"{emoji} *{name} погода*\n\n"
                         f"⏰ Закончится: {ends_time} МСК\n"
-                        f"⏳ Осталось: ~{minutes_left} мин"
+                        f"⏳ Осталось: ~{time_str}"
                     )
                 else:
                     return "🌤️ *ПОГОДА В ИГРЕ*\n\n_Сейчас обычная погода_"
