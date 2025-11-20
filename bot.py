@@ -1471,7 +1471,7 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document | 
                              filters.AUDIO | filters.VOICE | filters.STICKER | 
                              filters.ANIMATION, broadcast_message_received)
             ]
