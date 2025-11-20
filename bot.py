@@ -1471,10 +1471,10 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document | 
-                             filters.AUDIO | filters.VOICE | filters.STICKER | 
-                             filters.ANIMATION, broadcast_message_received)
-            ]
+                MessageHandler(filters.PHOTO | filters.Video.ALL | filters.Document.ALL |
+               filters.Audio.ALL | filters.Voice.ALL | filters.Sticker.ALL |
+               filters.Animation.ALL, broadcast_message_received)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
     )
