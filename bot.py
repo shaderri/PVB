@@ -442,12 +442,12 @@ class StockTracker:
                 ts = int(time.time() * 1000)
                 url_with_ts = f"{url}?ts={ts}"
                 
-                # Добавляем заголовки как у браузера
+                # Добавляем заголовки как у браузера (без brotli)
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'application/json, text/plain, */*',
                     'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept-Encoding': 'gzip, deflate',
                     'Connection': 'keep-alive',
                     'Referer': 'https://plantsvsbrainrot.com/'
                 }
@@ -545,7 +545,17 @@ class StockTracker:
             ts = int(time.time() * 1000)
             url_with_ts = f"{WEATHER_API_URL}?ts={ts}"
             
-            async with self.session.get(url_with_ts, timeout=10) as response:
+            # Добавляем заголовки как у браузера
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Referer': 'https://plantsvsbrainrot.com/'
+            }
+            
+            async with self.session.get(url_with_ts, headers=headers, timeout=10) as response:
                 if response.status == 200:
                     weather_data = await response.json()
                     
@@ -553,6 +563,8 @@ class StockTracker:
                     if weather_data and weather_data.get('active'):
                         return weather_data
                     return None
+                else:
+                    logger.warning(f"Weather API вернул статус {response.status}")
             return None
         except Exception as e:
             logger.error(f"❌ Ошибка fetch_weather: {e}")
@@ -1202,8 +1214,35 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     if user_id != ADMIN_ID:
         return ConversationHandler.END
     
-    message_text = update.message.text or ""
-    message_html = update.message.text_html or message_text
+    message = update.message
+    
+    # Сохраняем всё сообщение целиком для пересылки
+    context.user_data['broadcast_message'] = message
+    context.user_data['broadcast_type'] = 'forward'  # Тип рассылки - пересылка
+    
+    # Формируем предпросмотр
+    preview_parts = ["📝 *ПРЕДПРОСМОТР СООБЩЕНИЯ:*\n"]
+    
+    if message.text:
+        preview_parts.append(f"Текст: {message.text[:200]}{'...' if len(message.text) > 200 else ''}")
+    if message.photo:
+        preview_parts.append("📷 Фото: да")
+    if message.video:
+        preview_parts.append("🎬 Видео: да")
+    if message.document:
+        preview_parts.append("📄 Документ: да")
+    if message.audio:
+        preview_parts.append("🎵 Аудио: да")
+    if message.voice:
+        preview_parts.append("🎤 Голосовое: да")
+    if message.sticker:
+        preview_parts.append("🎭 Стикер: да")
+    if message.animation:
+        preview_parts.append("🎞 GIF: да")
+    if message.reply_markup:
+        preview_parts.append("🔘 Кнопки: да")
+    
+    preview_parts.append("\nОтправить это сообщение всем пользователям?")
     
     keyboard = [
         [
@@ -1213,13 +1252,8 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    context.user_data['broadcast_text'] = message_text
-    context.user_data['broadcast_html'] = message_html
-    context.user_data['broadcast_entities'] = update.message.entities or []
-    
     await update.effective_message.reply_text(
-        f"📝 *ПРЕДПРОСМОТР СООБЩЕНИЯ:*\n\n{message_text}\n\n"
-        f"Отправить это сообщение всем пользователям?",
+        "\n".join(preview_parts),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN
     )
@@ -1243,12 +1277,11 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     if data == "bc_confirm":
-        broadcast_text = context.user_data.get('broadcast_text')
-        broadcast_html = context.user_data.get('broadcast_html')
-        broadcast_entities = context.user_data.get('broadcast_entities', [])
+        broadcast_message = context.user_data.get('broadcast_message')
+        broadcast_type = context.user_data.get('broadcast_type', 'text')
         
-        if not broadcast_text:
-            await query.edit_message_text("❌ Ошибка: текст сообщения не найден")
+        if not broadcast_message:
+            await query.edit_message_text("❌ Ошибка: сообщение не найдено")
             return
         
         await query.edit_message_text("📤 Начинаю рассылку...")
@@ -1264,22 +1297,13 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         for user_id_to_send in users:
             try:
-                if broadcast_entities:
-                    await context.bot.send_message(
-                        chat_id=user_id_to_send,
-                        text=broadcast_html,
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=user_id_to_send,
-                        text=broadcast_text,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
+                # Копируем сообщение со всеми медиа, кнопками и форматированием
+                await broadcast_message.copy(chat_id=user_id_to_send)
                 sent += 1
                 await asyncio.sleep(0.05)
-            except Exception:
+            except Exception as e:
                 failed += 1
+                logger.debug(f"Не удалось отправить пользователю {user_id_to_send}: {e}")
         
         report = (
             f"✅ *РАССЫЛКА ЗАВЕРШЕНА*\n\n"
@@ -1445,7 +1469,12 @@ def main():
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", broadcast_command)],
         states={
-            BROADCAST_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received)]
+            BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
+                             filters.AUDIO | filters.VOICE | filters.STICKER | 
+                             filters.ANIMATION, broadcast_message_received)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
     )
