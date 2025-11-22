@@ -19,7 +19,7 @@ load_dotenv()
 # Настройки бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-REQUIRED_CHANNEL = "@PlantsVsBrain"
+REQUIRED_CHANNELS = ["@PlantsVsBrain", "@linkRobloxNews"]
 
 # Admin ID
 ADMIN_ID = 7177110883
@@ -180,28 +180,43 @@ def check_command_cooldown(user_id: int, command: str) -> tuple[bool, Optional[i
     return True, None
 
 
-async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> bool:
+async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> tuple[bool, List[str]]:
+    """Проверка подписки на все обязательные каналы. Возвращает (подписан_на_все, список_неподписанных)"""
     if use_cache and user_id in subscription_cache:
         is_subscribed, cache_time = subscription_cache[user_id]
         now = get_moscow_time()
         if (now - cache_time).total_seconds() < SUBSCRIPTION_CACHE_TTL:
-            return is_subscribed
+            return (is_subscribed, [])
     
-    try:
-        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        is_subscribed = member.status in ['member', 'administrator', 'creator']
-        subscription_cache[user_id] = (is_subscribed, get_moscow_time())
-        return is_subscribed
-    except TelegramError:
-        subscription_cache[user_id] = (False, get_moscow_time())
-        return False
+    not_subscribed = []
+    
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                not_subscribed.append(channel)
+        except TelegramError:
+            not_subscribed.append(channel)
+    
+    is_subscribed = len(not_subscribed) == 0
+    subscription_cache[user_id] = (is_subscribed, get_moscow_time())
+    
+    return (is_subscribed, not_subscribed)
 
 
-def get_subscription_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [InlineKeyboardButton("📢 Подписаться на канал", url=f"https://t.me/{REQUIRED_CHANNEL[1:]}")],
-        [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")]
-    ]
+def get_subscription_keyboard(not_subscribed: List[str] = None) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопками подписки на каналы"""
+    if not_subscribed is None:
+        not_subscribed = REQUIRED_CHANNELS
+    
+    keyboard = []
+    
+    for channel in not_subscribed:
+        channel_name = channel.replace("@", "")
+        keyboard.append([InlineKeyboardButton(f"📢 Подписаться на {channel}", url=f"https://t.me/{channel_name}")])
+    
+    keyboard.append([InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -317,18 +332,80 @@ class SupabaseDB:
             return False
     
     async def get_all_users(self) -> List[int]:
+        """ИСПРАВЛЕНО: Получение ВСЕХ пользователей с пагинацией"""
+        all_users = []
+        offset = 0
+        limit = 1000  # Максимум за один запрос
+        
         try:
             await self.init_session()
-            params = {"select": "user_id"}
             
-            async with self.session.get(USERS_URL, headers=self.headers, params=params, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return [item['user_id'] for item in data]
-                return []
+            while True:
+                params = {
+                    "select": "user_id",
+                    "limit": limit,
+                    "offset": offset,
+                    "order": "user_id.asc"
+                }
+                
+                async with self.session.get(USERS_URL, headers=self.headers, params=params, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if not data:  # Больше нет данных
+                            break
+                        
+                        batch_users = [item['user_id'] for item in data]
+                        all_users.extend(batch_users)
+                        
+                        logger.info(f"📥 Загружено {len(batch_users)} пользователей (всего: {len(all_users)})")
+                        
+                        # Если получили меньше чем limit, значит это последняя страница
+                        if len(data) < limit:
+                            break
+                        
+                        offset += limit
+                        await asyncio.sleep(0.1)  # Небольшая задержка между запросами
+                    else:
+                        logger.error(f"Ошибка получения пользователей: статус {response.status}")
+                        break
+            
+            logger.info(f"✅ Всего загружено {len(all_users)} пользователей")
+            return all_users
+            
         except Exception as e:
             logger.error(f"Ошибка получения пользователей: {e}")
-            return []
+            return all_users if all_users else []
+    
+    async def delete_user(self, user_id: int) -> bool:
+        """Удаление пользователя из базы"""
+        try:
+            await self.init_session()
+            params = {"user_id": f"eq.{user_id}"}
+            
+            async with self.session.delete(USERS_URL, headers=self.headers, params=params, timeout=5) as response:
+                if response.status in [200, 204]:
+                    logger.info(f"🗑️ Удален пользователь {user_id}")
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка удаления пользователя {user_id}: {e}")
+            return False
+    
+    async def delete_user_autostocks(self, user_id: int) -> bool:
+        """Удаление всех автостоков пользователя"""
+        try:
+            await self.init_session()
+            params = {"user_id": f"eq.{user_id}"}
+            
+            async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
+                if response.status in [200, 204]:
+                    logger.info(f"🗑️ Удалены автостоки пользователя {user_id}")
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка удаления автостоков пользователя {user_id}: {e}")
+            return False
     
     async def load_user_autostocks(self, user_id: int, use_cache: bool = True) -> Set[str]:
         if use_cache and user_id in user_autostocks_cache:
@@ -388,29 +465,57 @@ class SupabaseDB:
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        """УЛУЧШЕНО: Более надежное получение пользователей с retry"""
+        """ИСПРАВЛЕНО: Получение ВСЕХ пользователей для предмета с пагинацией"""
+        all_users = []
+        offset = 0
+        limit = 1000
+        
         max_retries = 2
         for attempt in range(max_retries):
             try:
                 await self.init_session()
-                params = {"item_name": f"eq.{item_name}", "select": "user_id"}
                 
-                async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        users = [item['user_id'] for item in data]
-                        return users
-                    elif attempt < max_retries - 1:
-                        await asyncio.sleep(1)
-                        continue
-                    return []
+                while True:
+                    params = {
+                        "item_name": f"eq.{item_name}",
+                        "select": "user_id",
+                        "limit": limit,
+                        "offset": offset,
+                        "order": "user_id.asc"
+                    }
+                    
+                    async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=15) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            
+                            if not data:
+                                break
+                            
+                            batch_users = [item['user_id'] for item in data]
+                            all_users.extend(batch_users)
+                            
+                            if len(data) < limit:
+                                break
+                            
+                            offset += limit
+                            await asyncio.sleep(0.05)
+                        elif attempt < max_retries - 1:
+                            await asyncio.sleep(1)
+                            break
+                        else:
+                            logger.error(f"Ошибка получения пользователей для {item_name}: статус {response.status}")
+                            return all_users if all_users else []
+                
+                return all_users
+                
             except Exception as e:
                 logger.error(f"Ошибка получения пользователей для {item_name} (попытка {attempt+1}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1)
                 else:
-                    return []
-        return []
+                    return all_users if all_users else []
+        
+        return all_users
 
 
 class StockTracker:
@@ -840,15 +945,37 @@ class StockTracker:
             
             return True
         except TelegramError as e:
+            error_msg = str(e).lower()
             # Подробное логирование ошибок Telegram
-            if "Forbidden" in str(e) or "blocked" in str(e).lower():
-                logger.debug(f"🚫 Пользователь {user_id} заблокировал бота")
+            if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
+                logger.debug(f"🚫 Пользователь {user_id} заблокировал бота - удаляем")
+                # Асинхронно удаляем пользователя
+                asyncio.create_task(self.cleanup_blocked_user(user_id))
+                return False
             else:
                 logger.debug(f"⚠️ Не удалось отправить {item_name} пользователю {user_id}: {e}")
             return False
         except Exception as e:
             logger.error(f"❌ Ошибка отправки {item_name} пользователю {user_id}: {e}")
             return False
+    
+    async def cleanup_blocked_user(self, user_id: int):
+        """Очистка заблокировавшего пользователя из всех систем"""
+        try:
+            # Удаляем автостоки
+            await self.db.delete_user_autostocks(user_id)
+            # Удаляем пользователя
+            await self.db.delete_user(user_id)
+            
+            # Удаляем из кэшей
+            user_autostocks_cache.pop(user_id, None)
+            user_autostocks_time.pop(user_id, None)
+            subscription_cache.pop(user_id, None)
+            user_sent_notifications.pop(user_id, None)
+            
+            logger.info(f"✅ Очищен заблокировавший пользователь {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки пользователя {user_id}: {e}")
 
 
 tracker = StockTracker()
@@ -860,7 +987,7 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
     
     user_id = update.effective_user.id
     
-    is_subscribed = await check_subscription(user_id, context.bot, use_cache=False)
+    is_subscribed, not_subscribed = await check_subscription(user_id, context.bot, use_cache=False)
     
     if is_subscribed:
         await query.edit_message_text(
@@ -870,12 +997,14 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
             "🌤️ /weather - Погода в игре\n"
             "🔔 /autostock - Настроить автостоки\n",
             parse_mode=ParseMode.MARKDOWN
-            )
+        )
     else:
+        channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
         await query.edit_message_text(
-            "❌ *ПОДПИСКА НЕ НАЙДЕНА*\n\n"
-            f"Пожалуйста, подпишитесь на канал {REQUIRED_CHANNEL} и нажмите кнопку ещё раз.",
-            reply_markup=get_subscription_keyboard(),
+            f"❌ *ПОДПИСКА НЕ НАЙДЕНА*\n\n"
+            f"Пожалуйста, подпишитесь на каналы:\n{channels_text}\n\n"
+            f"И нажмите кнопку ещё раз.",
+            reply_markup=get_subscription_keyboard(not_subscribed),
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -900,11 +1029,12 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if update.effective_chat.type == ChatType.PRIVATE:
-        if not await check_subscription(user_id, context.bot):
+        is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
+        if not is_subscribed:
+            channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
             await update.effective_message.reply_text(
-                f"⚠️ *Для использования бота подпишитесь на канал*\n\n"
-                f"Канал: {REQUIRED_CHANNEL}",
-                reply_markup=get_subscription_keyboard(),
+                f"⚠️ *Для использования бота подпишитесь на каналы*\n\n{channels_text}",
+                reply_markup=get_subscription_keyboard(not_subscribed),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
@@ -934,11 +1064,12 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if update.effective_chat.type == ChatType.PRIVATE:
-        if not await check_subscription(user_id, context.bot):
+        is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
+        if not is_subscribed:
+            channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
             await update.effective_message.reply_text(
-                f"⚠️ *Для использования бота подпишитесь на канал*\n\n"
-                f"Канал: {REQUIRED_CHANNEL}",
-                reply_markup=get_subscription_keyboard(),
+                f"⚠️ *Для использования бота подпишитесь на каналы*\n\n{channels_text}",
+                reply_markup=get_subscription_keyboard(not_subscribed),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
@@ -970,11 +1101,12 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    if not await check_subscription(user_id, context.bot):
+    is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
+    if not is_subscribed:
+        channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
         await update.effective_message.reply_text(
-            f"⚠️ *Для использования автостоков подпишитесь на канал*\n\n"
-            f"Канал: {REQUIRED_CHANNEL}",
-            reply_markup=get_subscription_keyboard(),
+            f"⚠️ *Для использования автостоков подпишитесь на каналы*\n\n{channels_text}",
+            reply_markup=get_subscription_keyboard(not_subscribed),
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -1292,29 +1424,82 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.message.reply_text("❌ Пользователи не найдены")
             return
         
+        logger.info(f"📊 Начинаю рассылку для {len(users)} пользователей")
+        
         sent = 0
         failed = 0
+        blocked = 0
+        users_to_delete = []
         
-        for user_id_to_send in users:
-            try:
-                # Копируем сообщение со всеми медиа, кнопками и форматированием
-                await broadcast_message.copy(chat_id=user_id_to_send)
-                sent += 1
-                await asyncio.sleep(0.05)
-            except Exception as e:
-                failed += 1
-                logger.debug(f"Не удалось отправить пользователю {user_id_to_send}: {e}")
+        # Отправляем пакетами по 20 пользователей
+        batch_size = 20
+        for i in range(0, len(users), batch_size):
+            batch = users[i:i + batch_size]
+            
+            for user_id_to_send in batch:
+                try:
+                    # Копируем сообщение со всеми медиа, кнопками и форматированием
+                    await broadcast_message.copy(chat_id=user_id_to_send)
+                    sent += 1
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
+                        # Пользователь заблокировал бота
+                        blocked += 1
+                        users_to_delete.append(user_id_to_send)
+                        logger.debug(f"🚫 Пользователь {user_id_to_send} заблокировал бота")
+                    else:
+                        failed += 1
+                        logger.debug(f"❌ Не удалось отправить пользователю {user_id_to_send}: {e}")
+            
+            # Обновляем статус каждые 100 пользователей
+            if (i + batch_size) % 100 == 0 or i + batch_size >= len(users):
+                progress = min(i + batch_size, len(users))
+                try:
+                    await query.edit_message_text(
+                        f"📤 Рассылка в процессе...\n\n"
+                        f"Обработано: {progress}/{len(users)}\n"
+                        f"✅ Отправлено: {sent}\n"
+                        f"🚫 Заблокировали: {blocked}\n"
+                        f"❌ Ошибок: {failed}"
+                    )
+                except:
+                    pass
+            
+            await asyncio.sleep(0.05)
+        
+        # Удаляем заблокировавших пользователей из базы
+        if users_to_delete:
+            logger.info(f"🗑️ Начинаю удаление {len(users_to_delete)} заблокировавших пользователей")
+            deleted_count = 0
+            
+            for user_id_to_delete in users_to_delete:
+                # Удаляем автостоки пользователя
+                await tracker.db.delete_user_autostocks(user_id_to_delete)
+                # Удаляем самого пользователя
+                if await tracker.db.delete_user(user_id_to_delete):
+                    deleted_count += 1
+                
+                # Удаляем из кэшей
+                user_autostocks_cache.pop(user_id_to_delete, None)
+                user_autostocks_time.pop(user_id_to_delete, None)
+                subscription_cache.pop(user_id_to_delete, None)
+                user_sent_notifications.pop(user_id_to_delete, None)
+            
+            logger.info(f"✅ Удалено {deleted_count} пользователей из базы")
         
         report = (
             f"✅ *РАССЫЛКА ЗАВЕРШЕНА*\n\n"
             f"📊 Статистика:\n"
+            f"• Всего пользователей: {len(users)}\n"
             f"• Отправлено: {sent}\n"
-            f"• Ошибок: {failed}\n"
-            f"• Всего пользователей: {len(users)}"
+            f"• Заблокировали бота: {blocked}\n"
+            f"• Других ошибок: {failed}\n"
+            f"• Удалено из базы: {len(users_to_delete)}"
         )
         
         await query.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
-        logger.info(f"Рассылка завершена: {sent} успешно, {failed} ошибок")
+        logger.info(f"Рассылка завершена: {sent} успешно, {blocked} заблокировали, {failed} ошибок")
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1335,14 +1520,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update.effective_user.first_name
     )
     
-    channel_info = f"📢 Канал: {REQUIRED_CHANNEL}" if CHANNEL_ID else ""
+    channels_info = "\n".join([f"📢 {ch}" for ch in REQUIRED_CHANNELS]) if CHANNEL_ID else ""
     welcome_message = (
         "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*\n\n"
         "🤖 Я помогу отслеживать сток предметов в игре:\n\n"
         "📊 /stock - Посмотреть текущий сток\n"
         "🌤️ /weather - Узнать погоду в игре\n"
         "🔔 /autostock - Настроить автостоки (уведомления)\n"
-        f"{channel_info}\n\n"
+        f"\n{channels_info}\n"
     )
     await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
@@ -1471,8 +1656,10 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.Sticker.ALL | filters.ANIMATION, broadcast_message_received)
-            ],
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
+                             filters.AUDIO | filters.VOICE | filters.STICKER | 
+                             filters.ANIMATION, broadcast_message_received)
+            ]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
     )
@@ -1511,7 +1698,7 @@ def main():
     
     logger.info("🚀 Бот запущен успешно!")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
-    logger.info(f"📢 Канал: {REQUIRED_CHANNEL}")
+    logger.info(f"📢 Обязательные каналы: {', '.join(REQUIRED_CHANNELS)}")
     logger.info(f"⏰ Интервал проверки: каждые {CHECK_INTERVAL_MINUTES} минут")
     logger.info("="*60)
     telegram_app.run_polling(allowed_updates=None, drop_pending_updates=True)
