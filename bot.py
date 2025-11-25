@@ -31,11 +31,13 @@ SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVC
 AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
 USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
 
-# Новый API для стока
-STOCK_API_URL = "https://plantsvsbrainrot.com/api/seed-shop.php"
+# API для стока и погоды
+STOCK_SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
+STOCK_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
 
-# Новый API для погоды
-WEATHER_API_URL = "https://plantsvsbrainrot.com/api/weather.php"
+SEEDS_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
+GEAR_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
+WEATHER_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
 
 CHECK_INTERVAL_MINUTES = 5
 CHECK_DELAY_SECONDS = 15
@@ -535,38 +537,29 @@ class StockTracker:
             await self.session.close()
         await self.db.close_session()
 
-    async def fetch_supabase_api(self, url: str) -> Optional[Dict]:
-        """Работа с новым API"""
+    async def fetch_supabase_api(self, url: str) -> Optional[list]:
+        """Работа с Supabase API"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 await self.init_session()
                 
-                # Добавляем timestamp для обхода кэша
-                import time
-                ts = int(time.time() * 1000)
-                url_with_ts = f"{url}?ts={ts}"
-                
-                # Добавляем заголовки как у браузера (без brotli)
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'application/json, text/plain, */*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate',
-                    'Connection': 'keep-alive',
-                    'Referer': 'https://plantsvsbrainrot.com/'
+                    "apikey": STOCK_API_KEY,
+                    "Authorization": f"Bearer {STOCK_API_KEY}",
+                    "Content-Type": "application/json"
                 }
                 
-                async with self.session.get(url_with_ts, headers=headers, timeout=15) as response:
+                async with self.session.get(url, headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
                         return data
                     elif attempt < max_retries - 1:
-                        logger.warning(f"API вернул {response.status}, повтор через 2 сек... URL: {url_with_ts}")
+                        logger.warning(f"API вернул {response.status}, повтор через 2 сек... URL: {url}")
                         await asyncio.sleep(2)
                         continue
                     else:
-                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток. URL: {url_with_ts}")
+                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток. URL: {url}")
                         return None
             except asyncio.TimeoutError:
                 logger.error(f"❌ Timeout при запросе к API (попытка {attempt+1}/{max_retries})")
@@ -591,45 +584,44 @@ class StockTracker:
                 return stock_cache
         
         try:
-            # Используем новый API
-            data = await self.fetch_supabase_api(STOCK_API_URL)
+            # Загружаем семена и гиры параллельно
+            seeds_data, gear_data = await asyncio.gather(
+                self.fetch_supabase_api(SEEDS_API_URL),
+                self.fetch_supabase_api(GEAR_API_URL)
+            )
             
-            if not data:
+            if not seeds_data and not gear_data:
                 logger.error("❌ Нет данных от API")
                 return None
             
-            # Преобразуем новый формат в наш внутренний формат
-            result = {"data": [], "reportedAt": data.get('reportedAt', 0)}
+            # Преобразуем формат в наш внутренний формат
+            result = {"data": []}
             
             # Обрабатываем seeds
-            seeds = data.get('seeds', [])
-            for item in seeds:
-                name = item.get('name', '')
-                qty = item.get('qty', 0)
-                emoji = item.get('emoji', '📦')
-                
-                if name and qty > 0:
-                    result['data'].append({
-                        'display_name': name,
-                        'multiplier': qty,
-                        'type': 'seeds',
-                        'emoji': emoji
-                    })
+            if seeds_data:
+                for item in seeds_data:
+                    display_name = item.get('display_name', '')
+                    multiplier = item.get('multiplier', 0)
+                    
+                    if display_name and multiplier > 0:
+                        result['data'].append({
+                            'display_name': display_name,
+                            'multiplier': multiplier,
+                            'type': 'seeds'
+                        })
             
             # Обрабатываем gear
-            gear = data.get('gear', [])
-            for item in gear:
-                name = item.get('name', '')
-                qty = item.get('qty', 0)
-                emoji = item.get('emoji', '⚔️')
-                
-                if name and qty > 0:
-                    result['data'].append({
-                        'display_name': name,
-                        'multiplier': qty,
-                        'type': 'gear',
-                        'emoji': emoji
-                    })
+            if gear_data:
+                for item in gear_data:
+                    display_name = item.get('display_name', '')
+                    multiplier = item.get('multiplier', 0)
+                    
+                    if display_name and multiplier > 0:
+                        result['data'].append({
+                            'display_name': display_name,
+                            'multiplier': multiplier,
+                            'type': 'gear'
+                        })
             
             stock_cache = result
             stock_cache_time = get_moscow_time()
@@ -1656,7 +1648,9 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.Sticker.ALL | filters.ANIMATION, broadcast_message_received)
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
+                             filters.AUDIO | filters.VOICE | filters.STICKER | 
+                             filters.ANIMATION, broadcast_message_received)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
