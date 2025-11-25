@@ -40,7 +40,7 @@ GEAR_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq
 WEATHER_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
 
 CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 15
+CHECK_DELAY_SECONDS = 16
 COMMAND_COOLDOWN = 10
 STOCK_CACHE_SECONDS = 20
 
