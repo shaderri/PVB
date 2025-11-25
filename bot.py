@@ -671,22 +671,21 @@ class StockTracker:
         if not weather_data or not weather_data.get('active'):
             return "🌤️ *ПОГОДА В ИГРЕ*\n\n_Сейчас обычная погода_"
         
-        weather_name = weather_data.get('name', '').lower()
-        start_timestamp = weather_data.get('start')
+        weather_id = weather_data.get('item_id', '').lower()
+        display_name = weather_data.get('display_name', 'Unknown')
+        ends_at_str = weather_data.get('ends_at')
         
-        # Получаем эмодзи из справочника, имя берем как есть из API
-        weather_info = WEATHER_DATA.get(weather_name, {"emoji": "🌤️"})
+        # Получаем эмодзи из справочника
+        weather_info = WEATHER_DATA.get(weather_id, {"emoji": "🌤️"})
         emoji = weather_info['emoji']
-        # Используем имя из API с заглавной буквы
-        name = weather_data.get('name', 'Unknown').capitalize()
         
         try:
             current_time = get_moscow_time()
             
-            # Вычисляем время окончания (start + 3 минуты)
-            if start_timestamp:
-                start_time = datetime.fromtimestamp(start_timestamp / 1000, tz=pytz.timezone('Europe/Moscow'))
-                ends_at_msk = start_time + timedelta(minutes=3)
+            # Вычисляем время окончания из ends_at
+            if ends_at_str:
+                ends_at = datetime.fromisoformat(ends_at_str.replace('Z', '+00:00'))
+                ends_at_msk = ends_at.astimezone(pytz.timezone('Europe/Moscow'))
                 
                 if ends_at_msk > current_time:
                     time_left = ends_at_msk - current_time
@@ -699,7 +698,7 @@ class StockTracker:
                     
                     return (
                         f"🌤️ *ПОГОДА В ИГРЕ*\n\n"
-                        f"{emoji} *{name} погода*\n\n"
+                        f"{emoji} *{display_name} погода*\n\n"
                         f"⏰ Закончится: {ends_time} МСК\n"
                         f"⏳ Осталось: ~{time_str}"
                     )
@@ -708,12 +707,12 @@ class StockTracker:
             else:
                 return (
                     f"🌤️ *ПОГОДА В ИГРЕ*\n\n"
-                    f"{emoji} *{name} погода*\n\n"
+                    f"{emoji} *{display_name} погода*\n\n"
                     f"_Время окончания неизвестно_"
                 )
         except Exception as e:
             logger.error(f"Ошибка форматирования погоды: {e}")
-            return f"🌤️ *ПОГОДА В ИГРЕ*\n\n{emoji} *{name} погода*"
+            return f"🌤️ *ПОГОДА В ИГРЕ*\n\n{emoji} *{display_name} погода*"
 
     def format_stock_message(self, stock_data: Dict) -> str:
         if not stock_data or 'data' not in stock_data:
@@ -1648,9 +1647,7 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
-                             filters.AUDIO | filters.VOICE | filters.STICKER | 
-                             filters.ANIMATION, broadcast_message_received)
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.Sticker.ALL | filters.ANIMATION, broadcast_message_received)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
