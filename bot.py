@@ -68,6 +68,7 @@ WEATHER_DATA = {
     "galaxy": {"emoji": "🌌", "name": "Галактика"}
 }
 
+# ОБНОВЛЕНО: Добавлено Brussel Sprouts
 ITEMS_DATA = {
     "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed"},
     "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed"},
@@ -85,6 +86,7 @@ ITEMS_DATA = {
     "Mango": {"emoji": "🥭", "price": "$367m", "category": "seed"},
     "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
     "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed"},
+    "Brussel Sprouts": {"emoji": "🥬", "price": "$900m", "category": "seed"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
@@ -106,18 +108,18 @@ def build_item_id_mappings():
         NAME_TO_ID[item_name] = safe_id
         ID_TO_NAME[safe_id] = item_name
 
-NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit"]
+# ОБНОВЛЕНО: Добавлено Brussel Sprouts в список уведомлений
+NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
 
 last_stock_state: Dict[str, int] = {}
 last_notification_time: Dict[str, datetime] = {}
 NOTIFICATION_COOLDOWN = 300
 
-# ИСПРАВЛЕНИЕ: Глобальный кулдаун для предмета + индивидуальный для пользователя
-item_last_seen: Dict[str, datetime] = {}  # {item_name: last_time_item_appeared}
-ITEM_COOLDOWN = 120  # 2 минуты глобальный кулдаун на предмет
+item_last_seen: Dict[str, datetime] = {}
+ITEM_COOLDOWN = 120
 
-user_sent_notifications: Dict[int, Dict[str, datetime]] = {}  # {user_id: {item_name: last_sent_time}}
-USER_NOTIFICATION_COOLDOWN = 180  # 3 минуты между повторными уведомлениями одного предмета одному юзеру
+user_sent_notifications: Dict[int, Dict[str, datetime]] = {}
+USER_NOTIFICATION_COOLDOWN = 180
 
 user_cooldowns: Dict[int, Dict[str, datetime]] = {}
 
@@ -142,8 +144,7 @@ last_keyboard_cache: Dict[tuple, str] = {}
 subscription_cache: Dict[int, tuple[bool, datetime]] = {}
 SUBSCRIPTION_CACHE_TTL = 300
 
-# НОВОЕ: Статистика для диагностики
-notification_stats: Dict[str, Dict] = {}  # {item_name: {sent: 0, skipped: 0, errors: 0}}
+notification_stats: Dict[str, Dict] = {}
 
 
 def build_item_id_mappings():
@@ -270,7 +271,6 @@ def _cleanup_cache():
         for user_id in to_delete:
             subscription_cache.pop(user_id, None)
     
-    # Очистка старых записей отправленных уведомлений (старше 10 минут)
     if len(user_sent_notifications) > 10000:
         to_delete = []
         for user_id, items_dict in list(user_sent_notifications.items()):
@@ -287,7 +287,6 @@ def _cleanup_cache():
         if to_delete:
             logger.info(f"♻️ Очищено {len(to_delete)} записей уведомлений")
     
-    # Очистка item_last_seen (старше 10 минут)
     old_items = [item for item, time in list(item_last_seen.items()) 
                 if (now - time).total_seconds() > 600]
     for item in old_items:
@@ -334,10 +333,10 @@ class SupabaseDB:
             return False
     
     async def get_all_users(self) -> List[int]:
-        """ИСПРАВЛЕНО: Получение ВСЕХ пользователей с пагинацией"""
+        """Получение ВСЕХ пользователей с пагинацией"""
         all_users = []
         offset = 0
-        limit = 1000  # Максимум за один запрос
+        limit = 1000
         
         try:
             await self.init_session()
@@ -354,7 +353,7 @@ class SupabaseDB:
                     if response.status == 200:
                         data = await response.json()
                         
-                        if not data:  # Больше нет данных
+                        if not data:
                             break
                         
                         batch_users = [item['user_id'] for item in data]
@@ -362,12 +361,11 @@ class SupabaseDB:
                         
                         logger.info(f"📥 Загружено {len(batch_users)} пользователей (всего: {len(all_users)})")
                         
-                        # Если получили меньше чем limit, значит это последняя страница
                         if len(data) < limit:
                             break
                         
                         offset += limit
-                        await asyncio.sleep(0.1)  # Небольшая задержка между запросами
+                        await asyncio.sleep(0.1)
                     else:
                         logger.error(f"Ошибка получения пользователей: статус {response.status}")
                         break
@@ -467,7 +465,7 @@ class SupabaseDB:
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        """ИСПРАВЛЕНО: Получение ВСЕХ пользователей для предмета с пагинацией"""
+        """Получение ВСЕХ пользователей для предмета с пагинацией"""
         all_users = []
         offset = 0
         limit = 1000
@@ -584,7 +582,6 @@ class StockTracker:
                 return stock_cache
         
         try:
-            # Загружаем семена и гиры параллельно
             seeds_data, gear_data = await asyncio.gather(
                 self.fetch_supabase_api(SEEDS_API_URL),
                 self.fetch_supabase_api(GEAR_API_URL)
@@ -594,10 +591,8 @@ class StockTracker:
                 logger.error("❌ Нет данных от API")
                 return None
             
-            # Преобразуем формат в наш внутренний формат
             result = {"data": []}
             
-            # Обрабатываем seeds
             if seeds_data:
                 for item in seeds_data:
                     display_name = item.get('display_name', '')
@@ -610,7 +605,6 @@ class StockTracker:
                             'type': 'seeds'
                         })
             
-            # Обрабатываем gear
             if gear_data:
                 for item in gear_data:
                     display_name = item.get('display_name', '')
@@ -1647,7 +1641,9 @@ def main():
         states={
             BROADCAST_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.Sticker.ALL | filters.ANIMATION, broadcast_message_received)
+                MessageHandler(filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
+                             filters.AUDIO | filters.VOICE | filters.STICKER | 
+                             filters.ANIMATION, broadcast_message_received)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel_command)]
