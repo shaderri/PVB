@@ -1,7 +1,6 @@
-python-telegram-bot==21.8
-aiohttp==3.11.10
-Flask==3.1.0
+python-telegram-bot==21.10
+discord.py-self==2.0.1
 python-dotenv==1.0.1
-requests
 pytz==2024.2
-Brotli
+aiohttp==3.11.11
+Flask==3.1.0

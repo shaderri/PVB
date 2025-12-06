@@ -1,74 +1,56 @@
 import asyncio
-import aiohttp
 import logging
 import os
-import json
 import hashlib
+import re
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Set
+from typing import Dict, Optional, List, Set, Tuple
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from telegram.constants import ParseMode, ChatType
 from telegram.error import TelegramError
-from flask import Flask, jsonify, request as flask_request
 import pytz
 from dotenv import load_dotenv
+import discord
+import aiohttp
+from flask import Flask, jsonify, request as flask_request
+import threading
 
 load_dotenv()
 
-# Настройки бота
+# ========== КОНФИГУРАЦИЯ ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 REQUIRED_CHANNELS = ["@PlantsVsBrain", "@linkRobloxNews"]
-
-# Admin ID
 ADMIN_ID = 7177110883
 
-# Мой Supabase для пользователей и автостоков
-SUPABASE_URL_BASE = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co/rest/v1")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://vgneaaqqqmdpkmeepvdp.supabase.co")
 SUPABASE_API_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbmVhYXFxcW1kcGttZWVwdmRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk1OTE1NjEsImV4cCI6MjA3NTE2NzU2MX0.uw7YbMCsAAk_PrOAa6lnc8Rwub9jGGkn6dtlLfJMB5w")
 
-AUTOSTOCKS_URL = f"{SUPABASE_URL_BASE}/user_autostocks"
-USERS_URL = f"{SUPABASE_URL_BASE}/bot_users"
+AUTOSTOCKS_URL = f"{SUPABASE_URL}/rest/v1/user_autostocks"
+USERS_URL = f"{SUPABASE_URL}/rest/v1/bot_users"
 
-# API для стока и погоды
-STOCK_SUPABASE_URL = "https://vextbzatpprnksyutbcp.supabase.co/rest/v1/game_stock"
-STOCK_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZleHRiemF0cHBybmtzeXV0YmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4NjYzMTIsImV4cCI6MjA2OTQ0MjMxMn0.apcPdBL5o-t5jK68d9_r9C7m-8H81NQbTXK0EW0o800"
+# Discord канал стоков
+DISCORD_STOCK_CHANNEL_ID = 1421168434414092328
 
-SEEDS_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.seeds&active=eq.true&order=created_at.desc"
-GEAR_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.gear&active=eq.true&order=created_at.desc"
-WEATHER_API_URL = f"{STOCK_SUPABASE_URL}?select=*&game=eq.plantsvsbrainrots&type=eq.weather&active=eq.true&order=created_at.desc"
-
-CHECK_INTERVAL_MINUTES = 5
-CHECK_DELAY_SECONDS = 16
-COMMAND_COOLDOWN = 10
 STOCK_CACHE_SECONDS = 20
+USER_NOTIFICATION_COOLDOWN = 180
+AUTOSTOCK_CACHE_TTL = 180
+SUBSCRIPTION_CACHE_TTL = 300
 
-BROADCAST_MESSAGE = 1
+if not BOT_TOKEN or not DISCORD_TOKEN:
+    raise ValueError("BOT_TOKEN и DISCORD_TOKEN обязательны!")
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
-
+# ========== ЛОГИРОВАНИЕ ==========
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('discord').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
-# Погода
-WEATHER_DATA = {
-    "gold": {"emoji": "🌟", "name": "Золотая"},
-    "diamond": {"emoji": "💎", "name": "Алмазная"},
-    "frozen": {"emoji": "❄️", "name": "Ледяная"},
-    "neon": {"emoji": "🌈", "name": "Неоновая"},
-    "rainbow": {"emoji": "🌈", "name": "Радужная"},
-    "upsidedown": {"emoji": "🙃", "name": "Перевёрнутая"},
-    "underworld": {"emoji": "🔥", "name": "Подземная"},
-    "magma": {"emoji": "🌋", "name": "Магма"},
-    "galaxy": {"emoji": "🌌", "name": "Галактика"}
-}
-
-# ОБНОВЛЕНО: Добавлено Brussel Sprouts
+# ========== ДАННЫЕ ПРЕДМЕТОВ ==========
 ITEMS_DATA = {
     "Cactus": {"emoji": "🌵", "price": "$200", "category": "seed"},
     "Strawberry": {"emoji": "🍓", "price": "$1,250", "category": "seed"},
@@ -94,58 +76,31 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-def build_item_id_mappings():
-    global NAME_TO_ID, ID_TO_NAME
-    NAME_TO_ID.clear()
-    ID_TO_NAME.clear()
-    
-    for item_name in ITEMS_DATA.keys():
-        hash_obj = hashlib.sha1(item_name.encode('utf-8'))
-        hash_hex = hash_obj.hexdigest()[:8]
-        category = ITEMS_DATA[item_name]['category']
-        safe_id = f"t_{category}_{hash_hex}"
-        
-        NAME_TO_ID[item_name] = safe_id
-        ID_TO_NAME[safe_id] = item_name
-
-# ОБНОВЛЕНО: Добавлено Brussel Sprouts в список уведомлений
 NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
-
-last_stock_state: Dict[str, int] = {}
-last_notification_time: Dict[str, datetime] = {}
-NOTIFICATION_COOLDOWN = 300
-
-item_last_seen: Dict[str, datetime] = {}
-ITEM_COOLDOWN = 120
-
-user_sent_notifications: Dict[int, Dict[str, datetime]] = {}
-USER_NOTIFICATION_COOLDOWN = 180
-
-user_cooldowns: Dict[int, Dict[str, datetime]] = {}
-
-stock_cache: Optional[Dict] = None
-stock_cache_time: Optional[datetime] = None
-
-telegram_app: Optional[Application] = None
-
-NAME_TO_ID: Dict[str, str] = {}
-ID_TO_NAME: Dict[str, str] = {}
-
-user_autostocks_cache: Dict[int, Set[str]] = {}
-user_autostocks_time: Dict[int, datetime] = {}
-AUTOSTOCK_CACHE_TTL = 180
-MAX_CACHE_SIZE = 15000
 
 SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
 GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
 
-last_keyboard_cache: Dict[tuple, str] = {}
+# ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ==========
+stock_cache: Optional[Dict] = None
+stock_cache_time: Optional[datetime] = None
+user_autostocks_cache: Dict[int, Set[str]] = {}
+user_autostocks_time: Dict[int, datetime] = {}
+subscription_cache: Dict[int, Tuple[bool, datetime]] = {}
+user_sent_notifications: Dict[int, Dict[str, datetime]] = {}
+item_last_seen: Dict[str, datetime] = {}
+last_stock_state: Dict[str, int] = {}
 
-subscription_cache: Dict[int, tuple[bool, datetime]] = {}
-SUBSCRIPTION_CACHE_TTL = 300
+NAME_TO_ID: Dict[str, str] = {}
+ID_TO_NAME: Dict[str, str] = {}
 
-notification_stats: Dict[str, Dict] = {}
+telegram_app: Optional[Application] = None
+discord_client: Optional[discord.Client] = None
+http_session: Optional[aiohttp.ClientSession] = None
 
+# ========== УТИЛИТЫ ==========
+def get_moscow_time() -> datetime:
+    return datetime.now(pytz.timezone('Europe/Moscow'))
 
 def build_item_id_mappings():
     global NAME_TO_ID, ID_TO_NAME
@@ -160,31 +115,10 @@ def build_item_id_mappings():
         
         NAME_TO_ID[item_name] = safe_id
         ID_TO_NAME[safe_id] = item_name
-
-
-def get_moscow_time() -> datetime:
-    return datetime.now(pytz.timezone('Europe/Moscow'))
-
-
-def check_command_cooldown(user_id: int, command: str) -> tuple[bool, Optional[int]]:
-    if user_id not in user_cooldowns:
-        user_cooldowns[user_id] = {}
     
-    if command in user_cooldowns[user_id]:
-        last_time = user_cooldowns[user_id][command]
-        now = get_moscow_time()
-        elapsed = (now - last_time).total_seconds()
-        
-        if elapsed < COMMAND_COOLDOWN:
-            seconds_left = int(COMMAND_COOLDOWN - elapsed)
-            return False, seconds_left
-    
-    user_cooldowns[user_id][command] = get_moscow_time()
-    return True, None
+    logger.info(f"✅ Маппинг: {len(NAME_TO_ID)} предметов")
 
-
-async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> tuple[bool, List[str]]:
-    """Проверка подписки на все обязательные каналы. Возвращает (подписан_на_все, список_неподписанных)"""
+async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> Tuple[bool, List[str]]:
     if use_cache and user_id in subscription_cache:
         is_subscribed, cache_time = subscription_cache[user_id]
         now = get_moscow_time()
@@ -192,7 +126,6 @@ async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> 
             return (is_subscribed, [])
     
     not_subscribed = []
-    
     for channel in REQUIRED_CHANNELS:
         try:
             member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
@@ -206,205 +139,95 @@ async def check_subscription(user_id: int, bot: Bot, use_cache: bool = True) -> 
     
     return (is_subscribed, not_subscribed)
 
-
 def get_subscription_keyboard(not_subscribed: List[str] = None) -> InlineKeyboardMarkup:
-    """Клавиатура с кнопками подписки на каналы"""
     if not_subscribed is None:
         not_subscribed = REQUIRED_CHANNELS
     
     keyboard = []
-    
     for channel in not_subscribed:
         channel_name = channel.replace("@", "")
-        keyboard.append([InlineKeyboardButton(f"📢 Подписаться на {channel}", url=f"https://t.me/{channel_name}")])
+        keyboard.append([InlineKeyboardButton(f"📢 {channel}", url=f"https://t.me/{channel_name}")])
     
     keyboard.append([InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")])
-    
     return InlineKeyboardMarkup(keyboard)
 
-
-def get_next_check_time() -> datetime:
-    now = get_moscow_time()
-    current_minute = now.minute
-    
-    next_minute = ((current_minute // CHECK_INTERVAL_MINUTES) + 1) * CHECK_INTERVAL_MINUTES
-    
-    if next_minute >= 60:
-        next_check = now.replace(minute=0, second=CHECK_DELAY_SECONDS, microsecond=0) + timedelta(hours=1)
-    else:
-        next_check = now.replace(minute=next_minute, second=CHECK_DELAY_SECONDS, microsecond=0)
-    
-    if next_check <= now:
-        next_check += timedelta(minutes=CHECK_INTERVAL_MINUTES)
-    
-    return next_check
-
-
-def calculate_sleep_time() -> float:
-    next_check = get_next_check_time()
-    now = get_moscow_time()
-    sleep_seconds = (next_check - now).total_seconds()
-    return max(sleep_seconds, 0)
-
-
-def _cleanup_cache():
-    global user_autostocks_cache, user_autostocks_time, subscription_cache, user_sent_notifications
-    global item_last_seen, notification_stats
-    
-    now = get_moscow_time()
-    
-    if len(user_autostocks_cache) > MAX_CACHE_SIZE:
-        to_delete = [uid for uid, ct in user_autostocks_time.items() 
-                     if (now - ct).total_seconds() > 600]
-        
-        for user_id in to_delete:
-            user_autostocks_cache.pop(user_id, None)
-            user_autostocks_time.pop(user_id, None)
-        
-        if to_delete:
-            logger.info(f"♻️ Очищено {len(to_delete)} автостоков")
-    
-    if len(subscription_cache) > 5000:
-        to_delete = [uid for uid, (_, ct) in list(subscription_cache.items()) 
-                     if (now - ct).total_seconds() > 600]
-        
-        for user_id in to_delete:
-            subscription_cache.pop(user_id, None)
-    
-    if len(user_sent_notifications) > 10000:
-        to_delete = []
-        for user_id, items_dict in list(user_sent_notifications.items()):
-            old_items = [item for item, sent_time in items_dict.items() 
-                        if (now - sent_time).total_seconds() > 600]
-            for item in old_items:
-                items_dict.pop(item, None)
-            if not items_dict:
-                to_delete.append(user_id)
-        
-        for user_id in to_delete:
-            user_sent_notifications.pop(user_id, None)
-        
-        if to_delete:
-            logger.info(f"♻️ Очищено {len(to_delete)} записей уведомлений")
-    
-    old_items = [item for item, time in list(item_last_seen.items()) 
-                if (now - time).total_seconds() > 600]
-    for item in old_items:
-        item_last_seen.pop(item, None)
-
-
+# ========== БАЗА ДАННЫХ ==========
 class SupabaseDB:
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
         self.headers = {
             "apikey": SUPABASE_API_KEY,
             "Authorization": f"Bearer {SUPABASE_API_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal"
+            "Content-Type": "application/json"
         }
     
-    async def init_session(self):
-        if not self.session or self.session.closed:
+    async def get_session(self) -> aiohttp.ClientSession:
+        global http_session
+        if http_session is None or http_session.closed:
             connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
             timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+            http_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        return http_session
     
-    async def close_session(self):
-        if self.session and not self.session.closed:
-            await self.session.close()
-    
-    async def save_user(self, user_id: int, username: Optional[str] = None, first_name: Optional[str] = None):
+    async def save_user(self, user_id: int, username: str = None, first_name: str = None):
         try:
-            await self.init_session()
+            session = await self.get_session()
             data = {
                 "user_id": user_id,
                 "username": username,
                 "first_name": first_name,
                 "last_seen": get_moscow_time().isoformat()
             }
-            
-            headers = self.headers.copy()
-            headers["Prefer"] = "resolution=merge-duplicates"
-            
-            async with self.session.post(USERS_URL, json=data, headers=headers, timeout=5) as response:
+            headers = {**self.headers, "Prefer": "resolution=merge-duplicates"}
+            async with session.post(USERS_URL, json=data, headers=headers, timeout=5) as response:
                 return response.status in [200, 201]
         except Exception as e:
-            logger.error(f"Ошибка сохранения пользователя: {e}")
+            logger.error(f"❌ save_user: {e}")
             return False
     
     async def get_all_users(self) -> List[int]:
-        """Получение ВСЕХ пользователей с пагинацией"""
         all_users = []
         offset = 0
         limit = 1000
         
         try:
-            await self.init_session()
-            
+            session = await self.get_session()
             while True:
-                params = {
-                    "select": "user_id",
-                    "limit": limit,
-                    "offset": offset,
-                    "order": "user_id.asc"
-                }
-                
-                async with self.session.get(USERS_URL, headers=self.headers, params=params, timeout=15) as response:
+                params = {"select": "user_id", "limit": limit, "offset": offset, "order": "user_id.asc"}
+                async with session.get(USERS_URL, headers=self.headers, params=params, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
-                        
                         if not data:
                             break
-                        
-                        batch_users = [item['user_id'] for item in data]
-                        all_users.extend(batch_users)
-                        
-                        logger.info(f"📥 Загружено {len(batch_users)} пользователей (всего: {len(all_users)})")
-                        
+                        all_users.extend([item['user_id'] for item in data])
                         if len(data) < limit:
                             break
-                        
                         offset += limit
                         await asyncio.sleep(0.1)
                     else:
-                        logger.error(f"Ошибка получения пользователей: статус {response.status}")
                         break
-            
-            logger.info(f"✅ Всего загружено {len(all_users)} пользователей")
             return all_users
-            
         except Exception as e:
-            logger.error(f"Ошибка получения пользователей: {e}")
-            return all_users if all_users else []
+            logger.error(f"❌ get_all_users: {e}")
+            return all_users
     
     async def delete_user(self, user_id: int) -> bool:
-        """Удаление пользователя из базы"""
         try:
-            await self.init_session()
+            session = await self.get_session()
             params = {"user_id": f"eq.{user_id}"}
-            
-            async with self.session.delete(USERS_URL, headers=self.headers, params=params, timeout=5) as response:
-                if response.status in [200, 204]:
-                    logger.info(f"🗑️ Удален пользователь {user_id}")
-                    return True
-                return False
+            async with session.delete(USERS_URL, headers=self.headers, params=params, timeout=5) as response:
+                return response.status in [200, 204]
         except Exception as e:
-            logger.error(f"Ошибка удаления пользователя {user_id}: {e}")
+            logger.error(f"❌ delete_user: {e}")
             return False
     
     async def delete_user_autostocks(self, user_id: int) -> bool:
-        """Удаление всех автостоков пользователя"""
         try:
-            await self.init_session()
+            session = await self.get_session()
             params = {"user_id": f"eq.{user_id}"}
-            
-            async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
-                if response.status in [200, 204]:
-                    logger.info(f"🗑️ Удалены автостоки пользователя {user_id}")
-                    return True
-                return False
+            async with session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
+                return response.status in [200, 204]
         except Exception as e:
-            logger.error(f"Ошибка удаления автостоков пользователя {user_id}: {e}")
+            logger.error(f"❌ delete_autostocks: {e}")
             return False
     
     async def load_user_autostocks(self, user_id: int, use_cache: bool = True) -> Set[str]:
@@ -416,21 +239,18 @@ class SupabaseDB:
                     return user_autostocks_cache[user_id].copy()
         
         try:
-            await self.init_session()
+            session = await self.get_session()
             params = {"user_id": f"eq.{user_id}", "select": "item_name"}
-            
-            async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
+            async with session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
                     items_set = {item['item_name'] for item in data}
-                    
                     user_autostocks_cache[user_id] = items_set
                     user_autostocks_time[user_id] = get_moscow_time()
-                    
                     return items_set
                 return set()
         except Exception as e:
-            logger.error(f"Ошибка загрузки автостоков: {e}")
+            logger.error(f"❌ load_autostocks: {e}")
             return set()
     
     async def save_user_autostock(self, user_id: int, item_name: str) -> bool:
@@ -440,13 +260,12 @@ class SupabaseDB:
         user_autostocks_time[user_id] = get_moscow_time()
         
         try:
-            await self.init_session()
+            session = await self.get_session()
             data = {"user_id": user_id, "item_name": item_name}
-            
-            async with self.session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
+            async with session.post(AUTOSTOCKS_URL, json=data, headers=self.headers, timeout=5) as response:
                 return response.status in [200, 201]
         except Exception as e:
-            logger.error(f"Ошибка сохранения автостока: {e}")
+            logger.error(f"❌ save_autostock: {e}")
             return False
     
     async def remove_user_autostock(self, user_id: int, item_name: str) -> bool:
@@ -455,464 +274,196 @@ class SupabaseDB:
             user_autostocks_time[user_id] = get_moscow_time()
         
         try:
-            await self.init_session()
+            session = await self.get_session()
             params = {"user_id": f"eq.{user_id}", "item_name": f"eq.{item_name}"}
-            
-            async with self.session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
+            async with session.delete(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=5) as response:
                 return response.status in [200, 204]
         except Exception as e:
-            logger.error(f"Ошибка удаления автостока: {e}")
+            logger.error(f"❌ remove_autostock: {e}")
             return False
     
     async def get_users_tracking_item(self, item_name: str) -> List[int]:
-        """Получение ВСЕХ пользователей для предмета с пагинацией"""
         all_users = []
         offset = 0
         limit = 1000
         
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                await self.init_session()
-                
-                while True:
-                    params = {
-                        "item_name": f"eq.{item_name}",
-                        "select": "user_id",
-                        "limit": limit,
-                        "offset": offset,
-                        "order": "user_id.asc"
-                    }
-                    
-                    async with self.session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=15) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            
-                            if not data:
-                                break
-                            
-                            batch_users = [item['user_id'] for item in data]
-                            all_users.extend(batch_users)
-                            
-                            if len(data) < limit:
-                                break
-                            
-                            offset += limit
-                            await asyncio.sleep(0.05)
-                        elif attempt < max_retries - 1:
-                            await asyncio.sleep(1)
-                            break
-                        else:
-                            logger.error(f"Ошибка получения пользователей для {item_name}: статус {response.status}")
-                            return all_users if all_users else []
-                
-                return all_users
-                
-            except Exception as e:
-                logger.error(f"Ошибка получения пользователей для {item_name} (попытка {attempt+1}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
-                else:
-                    return all_users if all_users else []
-        
-        return all_users
-
-
-class StockTracker:
-    def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.is_running = False
-        self.db = SupabaseDB()
-
-    async def init_session(self):
-        if not self.session or self.session.closed:
-            connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-
-    async def close_session(self):
-        if self.session and not self.session.closed:
-            await self.session.close()
-        await self.db.close_session()
-
-    async def fetch_supabase_api(self, url: str) -> Optional[list]:
-        """Работа с Supabase API"""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                await self.init_session()
-                
-                headers = {
-                    "apikey": STOCK_API_KEY,
-                    "Authorization": f"Bearer {STOCK_API_KEY}",
-                    "Content-Type": "application/json"
+        try:
+            session = await self.get_session()
+            while True:
+                params = {
+                    "item_name": f"eq.{item_name}",
+                    "select": "user_id",
+                    "limit": limit,
+                    "offset": offset
                 }
-                
-                async with self.session.get(url, headers=headers, timeout=15) as response:
+                async with session.get(AUTOSTOCKS_URL, headers=self.headers, params=params, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return data
-                    elif attempt < max_retries - 1:
-                        logger.warning(f"API вернул {response.status}, повтор через 2 сек... URL: {url}")
-                        await asyncio.sleep(2)
-                        continue
+                        if not data:
+                            break
+                        all_users.extend([item['user_id'] for item in data])
+                        if len(data) < limit:
+                            break
+                        offset += limit
+                        await asyncio.sleep(0.05)
                     else:
-                        logger.error(f"❌ API ошибка {response.status} после {max_retries} попыток. URL: {url}")
-                        return None
-            except asyncio.TimeoutError:
-                logger.error(f"❌ Timeout при запросе к API (попытка {attempt+1}/{max_retries})")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
-                else:
-                    return None
-            except Exception as e:
-                logger.error(f"❌ Ошибка API (попытка {attempt+1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
-                else:
-                    return None
-        return None
-
-    async def fetch_stock(self, use_cache: bool = True) -> Optional[Dict]:
-        global stock_cache, stock_cache_time
-        
-        if use_cache and stock_cache and stock_cache_time:
-            now = get_moscow_time()
-            if (now - stock_cache_time).total_seconds() < STOCK_CACHE_SECONDS:
-                return stock_cache
-        
-        try:
-            seeds_data, gear_data = await asyncio.gather(
-                self.fetch_supabase_api(SEEDS_API_URL),
-                self.fetch_supabase_api(GEAR_API_URL)
-            )
-            
-            if not seeds_data and not gear_data:
-                logger.error("❌ Нет данных от API")
-                return None
-            
-            result = {"data": []}
-            
-            if seeds_data:
-                for item in seeds_data:
-                    display_name = item.get('display_name', '')
-                    multiplier = item.get('multiplier', 0)
-                    
-                    if display_name and multiplier > 0:
-                        result['data'].append({
-                            'display_name': display_name,
-                            'multiplier': multiplier,
-                            'type': 'seeds'
-                        })
-            
-            if gear_data:
-                for item in gear_data:
-                    display_name = item.get('display_name', '')
-                    multiplier = item.get('multiplier', 0)
-                    
-                    if display_name and multiplier > 0:
-                        result['data'].append({
-                            'display_name': display_name,
-                            'multiplier': multiplier,
-                            'type': 'gear'
-                        })
-            
-            stock_cache = result
-            stock_cache_time = get_moscow_time()
-            
-            logger.info(f"✅ Загружено {len(result['data'])} предметов из стока")
-            return result
+                        break
+            return all_users
         except Exception as e:
-            logger.error(f"❌ Ошибка fetch_stock: {e}", exc_info=True)
-            return None
+            logger.error(f"❌ get_users_tracking: {e}")
+            return all_users
 
-    async def fetch_weather(self) -> Optional[Dict]:
-        """Получение погоды из нового API"""
-        try:
-            await self.init_session()
-            
-            # Добавляем timestamp для обхода кэша
-            import time
-            ts = int(time.time() * 1000)
-            url_with_ts = f"{WEATHER_API_URL}?ts={ts}"
-            
-            # Добавляем заголовки как у браузера
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Referer': 'https://plantsvsbrainrot.com/'
-            }
-            
-            async with self.session.get(url_with_ts, headers=headers, timeout=10) as response:
-                if response.status == 200:
-                    weather_data = await response.json()
-                    
-                    # Проверяем активна ли погода
-                    if weather_data and weather_data.get('active'):
-                        return weather_data
-                    return None
-                else:
-                    logger.warning(f"Weather API вернул статус {response.status}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Ошибка fetch_weather: {e}")
-            return None
-
-    def format_weather_message(self, weather_data: Optional[Dict]) -> str:
-        if not weather_data or not weather_data.get('active'):
-            return "🌤️ *ПОГОДА В ИГРЕ*\n\n_Сейчас обычная погода_"
+# ========== DISCORD ПАРСЕР ==========
+class DiscordStockParser:
+    def __init__(self):
+        self.db = SupabaseDB()
+        self.telegram_bot: Optional[Bot] = None
+    
+    def parse_stock_message(self, content: str, embeds: List[discord.Embed]) -> Dict:
+        """Парсит сообщение от Stock Notifier бота"""
+        result = {"seeds": [], "gear": []}
         
-        weather_id = weather_data.get('item_id', '').lower()
-        display_name = weather_data.get('display_name', 'Unknown')
-        ends_at_str = weather_data.get('ends_at')
+        # Парсим embeds
+        for embed in embeds:
+            if embed.description:
+                content += "\n" + embed.description
+            for field in embed.fields:
+                content += f"\n{field.name}\n{field.value}"
         
-        # Получаем эмодзи из справочника
-        weather_info = WEATHER_DATA.get(weather_id, {"emoji": "🌤️"})
-        emoji = weather_info['emoji']
+        lines = content.split('\n')
+        current_section = None
         
-        try:
-            current_time = get_moscow_time()
+        for line in lines:
+            line = line.strip()
             
-            # Вычисляем время окончания из ends_at
-            if ends_at_str:
-                ends_at = datetime.fromisoformat(ends_at_str.replace('Z', '+00:00'))
-                ends_at_msk = ends_at.astimezone(pytz.timezone('Europe/Moscow'))
-                
-                if ends_at_msk > current_time:
-                    time_left = ends_at_msk - current_time
-                    seconds_left = int(time_left.total_seconds())
-                    minutes_left = seconds_left // 60
-                    secs_remainder = seconds_left % 60
-                    ends_time = ends_at_msk.strftime("%H:%M")
-                    
-                    time_str = f"{minutes_left} мин {secs_remainder} сек" if minutes_left > 0 else f"{secs_remainder} сек"
-                    
-                    return (
-                        f"🌤️ *ПОГОДА В ИГРЕ*\n\n"
-                        f"{emoji} *{display_name} погода*\n\n"
-                        f"⏰ Закончится: {ends_time} МСК\n"
-                        f"⏳ Осталось: ~{time_str}"
-                    )
-                else:
-                    return "🌤️ *ПОГОДА В ИГРЕ*\n\n_Сейчас обычная погода_"
-            else:
-                return (
-                    f"🌤️ *ПОГОДА В ИГРЕ*\n\n"
-                    f"{emoji} *{display_name} погода*\n\n"
-                    f"_Время окончания неизвестно_"
-                )
-        except Exception as e:
-            logger.error(f"Ошибка форматирования погоды: {e}")
-            return f"🌤️ *ПОГОДА В ИГРЕ*\n\n{emoji} *{display_name} погода*"
-
-    def format_stock_message(self, stock_data: Dict) -> str:
-        if not stock_data or 'data' not in stock_data:
-            return "❌ *Не удалось получить данные о стоке*"
-
-        seeds = []
-        gear = []
-
-        for item in stock_data['data']:
-            display_name = item.get('display_name', '')
-            multiplier = item.get('multiplier', 0)
-            item_type = item.get('type', '')
-
-            if not display_name or multiplier == 0:
+            # Определяем секции
+            if 'Seeds Stock' in line or 'SEEDS' in line or '🌱' in line:
+                current_section = 'seeds'
                 continue
-
-            item_info = ITEMS_DATA.get(display_name, {"emoji": "📦", "price": "Unknown"})
-            formatted_item = f"{item_info['emoji']} *{display_name}*: x{multiplier} ({item_info['price']})"
-
-            if item_type == 'seeds':
-                seeds.append(formatted_item)
-            elif item_type == 'gear':
-                gear.append(formatted_item)
-
-        message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
-        message += "🌱 *СЕМЕНА:*\n" + ("\n".join(seeds) if seeds else "_Пусто_") + "\n\n"
-        message += "⚔️ *СНАРЯЖЕНИЕ:*\n" + ("\n".join(gear) if gear else "_Пусто_") + "\n\n"
-
-        current_time = get_moscow_time().strftime("%H:%M:%S")
-        message += f"🕒 _Обновлено: {current_time} МСК_"
-        return message
-
-    def can_send_notification(self, item_name: str) -> bool:
-        if item_name not in last_notification_time:
-            return True
+            elif 'Gear Stock' in line or 'GEAR' in line or '⚔️' in line:
+                current_section = 'gear'
+                continue
+            
+            # Парсим предметы (формат: 4x 🌵 Cactus Seed)
+            if current_section and 'x' in line:
+                # Очищаем эмодзи
+                clean_line = re.sub(r'[🌵🍓🎃🌻🐉🍆🍉🍇🥥🪴🥕🍅🍄🥭🍋⭐🥬🪣❄️🍌🌬️💧]', '', line)
+                
+                # Ищем паттерн: количество + название
+                match = re.search(r'(\d+)x?\s+([A-Za-z\s]+?)(?:\s+Seed|\s+Gun|\s+Grenade|\s+Bucket|\s+Blower|\s+Launcher)?$', clean_line)
+                if match:
+                    quantity = int(match.group(1))
+                    item_name_raw = match.group(2).strip()
+                    
+                    # Нормализуем имя
+                    item_name = self.normalize_item_name(item_name_raw)
+                    
+                    # Проверяем что предмет существует
+                    if item_name and item_name in ITEMS_DATA and quantity > 0:
+                        result[current_section].append((item_name, quantity))
         
-        now = get_moscow_time()
-        last_time = last_notification_time[item_name]
-        return (now - last_time).total_seconds() >= NOTIFICATION_COOLDOWN
-
+        return result
+    
+    def normalize_item_name(self, raw_name: str) -> Optional[str]:
+        """Нормализует название предмета"""
+        raw_name = raw_name.strip().lower()
+        
+        # Маппинг для нормализации
+        name_map = {
+            'cactus': 'Cactus',
+            'strawberry': 'Strawberry',
+            'pumpkin': 'Pumpkin',
+            'sunflower': 'Sunflower',
+            'dragon fruit': 'Dragon Fruit',
+            'dragon': 'Dragon Fruit',
+            'eggplant': 'Eggplant',
+            'watermelon': 'Watermelon',
+            'grape': 'Grape',
+            'cocotank': 'Cocotank',
+            'coco': 'Cocotank',
+            'carnivorous plant': 'Carnivorous Plant',
+            'carnivorous': 'Carnivorous Plant',
+            'mr carrot': 'Mr Carrot',
+            'carrot': 'Mr Carrot',
+            'tomatrio': 'Tomatrio',
+            'tomato': 'Tomatrio',
+            'shroombino': 'Shroombino',
+            'mushroom': 'Shroombino',
+            'mango': 'Mango',
+            'king limone': 'King Limone',
+            'limone': 'King Limone',
+            'starfruit': 'Starfruit',
+            'star': 'Starfruit',
+            'brussel sprouts': 'Brussel Sprouts',
+            'brussel': 'Brussel Sprouts',
+            'sprouts': 'Brussel Sprouts',
+            'water bucket': 'Water Bucket',
+            'bucket': 'Water Bucket',
+            'frost grenade': 'Frost Grenade',
+            'grenade': 'Frost Grenade',
+            'banana gun': 'Banana Gun',
+            'banana': 'Banana Gun',
+            'frost blower': 'Frost Blower',
+            'blower': 'Frost Blower',
+            'carrot launcher': 'Carrot Launcher',
+            'launcher': 'Carrot Launcher'
+        }
+        
+        return name_map.get(raw_name)
+    
+    def format_stock_message(self, stock_data: Dict) -> str:
+        if not stock_data:
+            return "❌ *Не удалось получить данные*"
+        
+        message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
+        
+        # Семена
+        seeds = stock_data.get('seeds', [])
+        message += "🌱 *СЕМЕНА:*\n"
+        if seeds:
+            for item_name, quantity in seeds:
+                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
+        else:
+            message += "_Пусто_\n"
+        
+        message += "\n"
+        
+        # Снаряжение
+        gear = stock_data.get('gear', [])
+        message += "⚔️ *СНАРЯЖЕНИЕ:*\n"
+        if gear:
+            for item_name, quantity in gear:
+                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
+        else:
+            message += "_Пусто_\n"
+        
+        current_time = get_moscow_time().strftime("%H:%M:%S")
+        message += f"\n🕒 _Обновлено: {current_time} МСК_"
+        return message
+    
     def should_notify_item(self, item_name: str) -> bool:
-        """НОВОЕ: Проверка глобального кулдауна предмета"""
         if item_name not in item_last_seen:
             return True
-        
         now = get_moscow_time()
         last_time = item_last_seen[item_name]
-        return (now - last_time).total_seconds() >= ITEM_COOLDOWN
+        return (now - last_time).total_seconds() >= 120
     
     def can_send_to_user(self, user_id: int, item_name: str) -> bool:
-        """Проверка может ли конкретный пользователь получить уведомление"""
         if user_id not in user_sent_notifications:
             return True
-        
         if item_name not in user_sent_notifications[user_id]:
             return True
-        
         now = get_moscow_time()
         last_time = user_sent_notifications[user_id][item_name]
         return (now - last_time).total_seconds() >= USER_NOTIFICATION_COOLDOWN
-
-    async def check_for_notifications(self, stock_data: Dict, bot: Bot, channel_id: str):
-        global last_stock_state
-        if not stock_data or 'data' not in stock_data or not channel_id:
-            return
-
-        current_stock = {}
-        for item in stock_data['data']:
-            display_name = item.get('display_name', '')
-            multiplier = item.get('multiplier', 0)
-            if display_name and multiplier > 0:
-                current_stock[display_name] = multiplier
-
-        for item_name in NOTIFICATION_ITEMS:
-            current_count = current_stock.get(item_name, 0)
-            previous_count = last_stock_state.get(item_name, 0)
-            
-            should_notify = False
-            if current_count > 0 and (previous_count == 0 or current_count > previous_count):
-                should_notify = True
-            
-            if should_notify and self.can_send_notification(item_name):
-                await self.send_notification(bot, channel_id, item_name, current_count)
-
-        last_stock_state = current_stock.copy()
-
-    async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
-        """ИСПРАВЛЕНО: Улучшенная логика с параллельной загрузкой и пакетной отправкой"""
-        if not stock_data or 'data' not in stock_data:
-            return
-
-        current_stock = {}
-        for item in stock_data['data']:
-            display_name = item.get('display_name', '')
-            multiplier = item.get('multiplier', 0)
-            if display_name and multiplier > 0:
-                current_stock[display_name] = multiplier
-
-        if not current_stock:
-            logger.info("📭 Нет предметов в стоке для уведомлений")
-            return
-
-        logger.info(f"📦 Найдено {len(current_stock)} предметов в стоке: {list(current_stock.keys())}")
-
-        # КРИТИЧНО: Параллельная загрузка всех пользователей для всех предметов
-        item_names = list(current_stock.keys())
-        
-        # Загружаем всех пользователей параллельно
-        user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
-        users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
-        
-        # Создаем мапу предмет -> список пользователей
-        item_users_map = {}
-        for item_name, result in zip(item_names, users_results):
-            if isinstance(result, Exception):
-                logger.error(f"❌ Ошибка загрузки пользователей для {item_name}: {result}")
-                continue
-            if result:
-                item_users_map[item_name] = result
-                logger.info(f"👥 {item_name}: найдено {len(result)} пользователей")
-
-        # Обрабатываем каждый предмет
-        for item_name, count in current_stock.items():
-            # Проверяем глобальный кулдаун предмета
-            if not self.should_notify_item(item_name):
-                logger.debug(f"⏸️ {item_name}: глобальный кулдаун активен")
-                continue
-            
-            users = item_users_map.get(item_name, [])
-            if not users:
-                continue
-            
-            # Инициализируем статистику
-            if item_name not in notification_stats:
-                notification_stats[item_name] = {"sent": 0, "skipped": 0, "errors": 0}
-            
-            logger.info(f"🔔 {item_name}: начинаем отправку {len(users)} пользователям")
-            
-            # Обновляем время последнего появления предмета
-            item_last_seen[item_name] = get_moscow_time()
-            
-            sent_count = 0
-            skipped_count = 0
-            error_count = 0
-            
-            # Отправляем пакетами по 30 пользователей
-            batch_size = 30
-            for i in range(0, len(users), batch_size):
-                batch = users[i:i + batch_size]
-                send_tasks = []
-                
-                for user_id in batch:
-                    # Проверяем персональный кулдаун
-                    if not self.can_send_to_user(user_id, item_name):
-                        skipped_count += 1
-                        notification_stats[item_name]["skipped"] += 1
-                        continue
-                    
-                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
-                
-                # Отправляем пакет
-                if send_tasks:
-                    results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                    
-                    for result in results:
-                        if result is True:
-                            sent_count += 1
-                            notification_stats[item_name]["sent"] += 1
-                        elif isinstance(result, Exception):
-                            error_count += 1
-                            notification_stats[item_name]["errors"] += 1
-                    
-                    # Небольшая задержка между пакетами
-                    if i + batch_size < len(users):
-                        await asyncio.sleep(0.05)
-            
-            logger.info(f"✅ {item_name}: отправлено {sent_count}, пропущено {skipped_count}, ошибок {error_count}")
-            
-            # Небольшая задержка между предметами
-            await asyncio.sleep(0.02)
-
-    async def send_notification(self, bot: Bot, channel_id: str, item_name: str, count: int):
-        try:
-            item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
-            current_time = get_moscow_time().strftime("%H:%M:%S")
-
-            message = (
-                f"🚨 *РЕДКИЙ ПРЕДМЕТ В СТОКЕ!* 🚨\n\n"
-                f"{item_info['emoji']} *{item_name}*\n"
-                f"📦 Количество: *x{count}*\n"
-                f"💰 Цена: {item_info['price']}\n"
-                f"🕒 {current_time} МСК"
-            )
-
-            await bot.send_message(chat_id=channel_id, text=message, parse_mode=ParseMode.MARKDOWN)
-            last_notification_time[item_name] = get_moscow_time()
-            logger.info(f"✅ Уведомление в канал: {item_name} x{count}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка отправки в канал: {e}")
-
+    
     async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int) -> bool:
-        """Отправка автосток уведомления с записью времени отправки"""
         try:
-            item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
+            item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
             current_time = get_moscow_time().strftime("%H:%M:%S")
-
+            
             message = (
                 f"🔔 *АВТОСТОК - {item_name}!*\n\n"
                 f"{item_info['emoji']} *{item_name}*\n"
@@ -920,10 +471,9 @@ class StockTracker:
                 f"💰 Цена: {item_info['price']}\n"
                 f"🕒 {current_time} МСК"
             )
-
+            
             await bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.MARKDOWN)
             
-            # Записываем время успешной отправки
             if user_id not in user_sent_notifications:
                 user_sent_notifications[user_id] = {}
             user_sent_notifications[user_id][item_name] = get_moscow_time()
@@ -931,45 +481,189 @@ class StockTracker:
             return True
         except TelegramError as e:
             error_msg = str(e).lower()
-            # Подробное логирование ошибок Telegram
             if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
-                logger.debug(f"🚫 Пользователь {user_id} заблокировал бота - удаляем")
-                # Асинхронно удаляем пользователя
+                logger.debug(f"🚫 {user_id} заблокировал бота")
                 asyncio.create_task(self.cleanup_blocked_user(user_id))
                 return False
             else:
-                logger.debug(f"⚠️ Не удалось отправить {item_name} пользователю {user_id}: {e}")
+                logger.debug(f"⚠️ Ошибка отправки {user_id}: {e}")
             return False
         except Exception as e:
-            logger.error(f"❌ Ошибка отправки {item_name} пользователю {user_id}: {e}")
+            logger.error(f"❌ Ошибка {user_id}: {e}")
             return False
     
     async def cleanup_blocked_user(self, user_id: int):
-        """Очистка заблокировавшего пользователя из всех систем"""
         try:
-            # Удаляем автостоки
             await self.db.delete_user_autostocks(user_id)
-            # Удаляем пользователя
             await self.db.delete_user(user_id)
             
-            # Удаляем из кэшей
             user_autostocks_cache.pop(user_id, None)
             user_autostocks_time.pop(user_id, None)
             subscription_cache.pop(user_id, None)
             user_sent_notifications.pop(user_id, None)
             
-            logger.info(f"✅ Очищен заблокировавший пользователь {user_id}")
+            logger.info(f"✅ Очищен {user_id}")
         except Exception as e:
-            logger.error(f"❌ Ошибка очистки пользователя {user_id}: {e}")
+            logger.error(f"❌ Очистка {user_id}: {e}")
+    
+    async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
+        if not stock_data:
+            return
+        
+        current_stock = {}
+        for stock_type in ['seeds', 'gear']:
+            for item_name, quantity in stock_data.get(stock_type, []):
+                if quantity > 0:
+                    current_stock[item_name] = quantity
+        
+        if not current_stock:
+            logger.info("📭 Нет предметов в стоке")
+            return
+        
+        logger.info(f"📦 Предметы: {list(current_stock.keys())}")
+        
+        # Параллельная загрузка пользователей
+        item_names = list(current_stock.keys())
+        user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
+        users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
+        
+        item_users_map = {}
+        for item_name, result in zip(item_names, users_results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ {item_name}: {result}")
+                continue
+            if result:
+                item_users_map[item_name] = result
+                logger.info(f"👥 {item_name}: {len(result)} пользователей")
+        
+        # Отправка уведомлений
+        for item_name, count in current_stock.items():
+            if not self.should_notify_item(item_name):
+                logger.debug(f"⏸️ {item_name}: кулдаун")
+                continue
+            
+            users = item_users_map.get(item_name, [])
+            if not users:
+                continue
+            
+            logger.info(f"🔔 {item_name}: отправка {len(users)} пользователям")
+            item_last_seen[item_name] = get_moscow_time()
+            
+            sent = 0
+            skipped = 0
+            errors = 0
+            
+            # Отправка пакетами
+            batch_size = 30
+            for i in range(0, len(users), batch_size):
+                batch = users[i:i + batch_size]
+                send_tasks = []
+                
+                for user_id in batch:
+                    if not self.can_send_to_user(user_id, item_name):
+                        skipped += 1
+                        continue
+                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+                
+                if send_tasks:
+                    results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                    for result in results:
+                        if result is True:
+                            sent += 1
+                        elif isinstance(result, Exception):
+                            errors += 1
+                    
+                    if i + batch_size < len(users):
+                        await asyncio.sleep(0.05)
+            
+            logger.info(f"✅ {item_name}: отправлено {sent}, пропущено {skipped}, ошибок {errors}")
+            await asyncio.sleep(0.02)
 
+parser = DiscordStockParser()
 
-tracker = StockTracker()
+# ========== DISCORD CLIENT ==========
+class PVBDiscordClient(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.messages = True
+        intents.message_content = True
+        intents.guilds = True
+        super().__init__(intents=intents)
+        self.stock_channel = None
+    
+    async def on_ready(self):
+        logger.info(f'✅ Discord: {self.user}')
+        self.stock_channel = self.get_channel(DISCORD_STOCK_CHANNEL_ID)
+        if self.stock_channel:
+            logger.info(f"✅ Канал стоков: {self.stock_channel.name}")
+        else:
+            logger.error("❌ Канал стоков не найден!")
+    
+    async def on_message(self, message: discord.Message):
+        """Реакция на новые сообщения в канале стоков"""
+        if message.channel.id != DISCORD_STOCK_CHANNEL_ID:
+            return
+        
+        if not message.author.bot:
+            return
+        
+        # Проверяем что это Stock Notifier
+        if 'Stock' not in message.content and not message.embeds:
+            return
+        
+        logger.info(f"📨 Новое сообщение от {message.author.name}")
+        
+        try:
+            # Парсим сообщение
+            stock_data = parser.parse_stock_message(message.content, message.embeds)
+            
+            if not stock_data['seeds'] and not stock_data['gear']:
+                logger.warning("⚠️ Не удалось распарсить стоки")
+                return
+            
+            # Обновляем кэш
+            global stock_cache, stock_cache_time
+            stock_cache = stock_data
+            stock_cache_time = get_moscow_time()
+            
+            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} гиров")
+            
+            # Отправляем автосток уведомления
+            if parser.telegram_bot:
+                await parser.check_user_autostocks(stock_data, parser.telegram_bot)
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки: {e}")
+    
+    async def fetch_latest_stock(self) -> Dict:
+        """Получение последних стоков из истории"""
+        global stock_cache, stock_cache_time
+        
+        now = get_moscow_time()
+        if stock_cache and stock_cache_time:
+            if (now - stock_cache_time).total_seconds() < STOCK_CACHE_SECONDS:
+                return stock_cache
+        
+        if not self.stock_channel:
+            return {"seeds": [], "gear": []}
+        
+        try:
+            async for msg in self.stock_channel.history(limit=10):
+                if msg.author.bot and ('Stock' in msg.content or msg.embeds):
+                    stock_data = parser.parse_stock_message(msg.content, msg.embeds)
+                    if stock_data['seeds'] or stock_data['gear']:
+                        stock_cache = stock_data
+                        stock_cache_time = now
+                        return stock_data
+            
+            return {"seeds": [], "gear": []}
+        except Exception as e:
+            logger.error(f"❌ fetch_latest_stock: {e}")
+            return {"seeds": [], "gear": []}
 
-
+# ========== КОМАНДЫ ==========
 async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     user_id = update.effective_user.id
     
     is_subscribed, not_subscribed = await check_subscription(user_id, context.bot, use_cache=False)
@@ -977,92 +671,61 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
     if is_subscribed:
         await query.edit_message_text(
             "✅ *ПОДПИСКА ПОДТВЕРЖДЕНА!*\n\n"
-            "Теперь вы можете пользоваться всеми функциями бота:\n\n"
             "📊 /stock - Текущий сток\n"
-            "🌤️ /weather - Погода в игре\n"
-            "🔔 /autostock - Настроить автостоки\n",
+            "🔔 /autostock - Автостоки\n",
             parse_mode=ParseMode.MARKDOWN
         )
     else:
         channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
         await query.edit_message_text(
             f"❌ *ПОДПИСКА НЕ НАЙДЕНА*\n\n"
-            f"Пожалуйста, подпишитесь на каналы:\n{channels_text}\n\n"
-            f"И нажмите кнопку ещё раз.",
+            f"Подпишитесь:\n{channels_text}",
             reply_markup=get_subscription_keyboard(not_subscribed),
             parse_mode=ParseMode.MARKDOWN
         )
 
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_message or not update.effective_user:
+        return
+    
+    user = update.effective_user
+    asyncio.create_task(parser.db.save_user(user.id, user.username, user.first_name))
+    
+    welcome_message = (
+        "👋 *Plants vs Brainrots Stock Tracker!*\n\n"
+        "📊 /stock - Текущий сток\n"
+        "🔔 /autostock - Автостоки\n"
+        "❓ /help - Справка\n\n"
+        f"📢 {REQUIRED_CHANNELS[0]}\n"
+        f"📢 {REQUIRED_CHANNELS[1]}"
+    )
+    await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
 
 async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.effective_message:
         return
     
     user_id = update.effective_user.id
-    
-    await tracker.db.save_user(
-        user_id, 
-        update.effective_user.username, 
-        update.effective_user.first_name
-    )
-    
-    can_execute, seconds_left = check_command_cooldown(user_id, 'stock')
-    if not can_execute:
-        await update.effective_message.reply_text(
-            f"⏳ Подождите {seconds_left} сек. перед следующим запросом"
-        )
-        return
+    asyncio.create_task(parser.db.save_user(user_id, update.effective_user.username, update.effective_user.first_name))
     
     if update.effective_chat.type == ChatType.PRIVATE:
         is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
         if not is_subscribed:
             channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
             await update.effective_message.reply_text(
-                f"⚠️ *Для использования бота подпишитесь на каналы*\n\n{channels_text}",
+                f"⚠️ *Подпишитесь на каналы*\n\n{channels_text}",
                 reply_markup=get_subscription_keyboard(not_subscribed),
                 parse_mode=ParseMode.MARKDOWN
             )
             return
     
-    stock_data = await tracker.fetch_stock(use_cache=True)
-    message = tracker.format_stock_message(stock_data)
-    await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
-
-async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not update.effective_message:
+    if not discord_client or not discord_client.is_ready():
+        await update.effective_message.reply_text("⚠️ *Discord загружается...*", parse_mode=ParseMode.MARKDOWN)
         return
     
-    user_id = update.effective_user.id
-    
-    await tracker.db.save_user(
-        user_id, 
-        update.effective_user.username, 
-        update.effective_user.first_name
-    )
-    
-    can_execute, seconds_left = check_command_cooldown(user_id, 'weather')
-    if not can_execute:
-        await update.effective_message.reply_text(
-            f"⏳ Подождите {seconds_left} сек. перед следующим запросом"
-        )
-        return
-    
-    if update.effective_chat.type == ChatType.PRIVATE:
-        is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
-        if not is_subscribed:
-            channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
-            await update.effective_message.reply_text(
-                f"⚠️ *Для использования бота подпишитесь на каналы*\n\n{channels_text}",
-                reply_markup=get_subscription_keyboard(not_subscribed),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-    
-    weather_data = await tracker.fetch_weather()
-    message = tracker.format_weather_message(weather_data)
+    stock_data = await discord_client.fetch_latest_stock()
+    message = parser.format_stock_message(stock_data)
     await update.effective_message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-
 
 async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.effective_message:
@@ -1072,96 +735,69 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_id = update.effective_user.id
-    
-    await tracker.db.save_user(
-        user_id, 
-        update.effective_user.username, 
-        update.effective_user.first_name
-    )
-    
-    can_execute, seconds_left = check_command_cooldown(user_id, 'autostock')
-    if not can_execute:
-        await update.effective_message.reply_text(
-            f"⏳ Подождите {seconds_left} сек. перед следующим запросом"
-        )
-        return
+    asyncio.create_task(parser.db.save_user(user_id, update.effective_user.username, update.effective_user.first_name))
     
     is_subscribed, not_subscribed = await check_subscription(user_id, context.bot)
     if not is_subscribed:
         channels_text = "\n".join([f"• {ch}" for ch in not_subscribed])
         await update.effective_message.reply_text(
-            f"⚠️ *Для использования автостоков подпишитесь на каналы*\n\n{channels_text}",
+            f"⚠️ *Подпишитесь на каналы*\n\n{channels_text}",
             reply_markup=get_subscription_keyboard(not_subscribed),
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
+    
     keyboard = [
         [InlineKeyboardButton("🌱 Семена", callback_data="as_seeds")],
         [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
         [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     message = (
         "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
-        "Выберите категорию предметов для отслеживания.\n\n"
-        "💡 Вы получите мгновенное уведомление, когда выбранный предмет появится в стоке!"
+        "Выберите категорию.\n\n"
+        "💡 Вы получите мгновенное уведомление при появлении предмета в стоке!"
     )
     
-    await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    await update.effective_message.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
 
-
-# НОВАЯ КОМАНДА: Статистика для админа
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.effective_message:
         return
     
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         return
     
-    global notification_stats, item_last_seen, user_sent_notifications
+    stats = (
+        f"📊 *СТАТИСТИКА*\n\n"
+        f"*Кэши:*\n"
+        f"• Автостоки: {len(user_autostocks_cache)}\n"
+        f"• Подписки: {len(subscription_cache)}\n"
+        f"• Уведомления: {len(user_sent_notifications)}\n"
+        f"• Предметы: {len(item_last_seen)}\n\n"
+        f"*Discord:* {'✅' if discord_client and discord_client.is_ready() else '❌'}\n"
+        f"*Telegram:* ✅"
+    )
     
-    stats_text = "📊 *СТАТИСТИКА УВЕДОМЛЕНИЙ*\n\n"
-    
-    if notification_stats:
-        stats_text += "*По предметам:*\n"
-        for item_name, stats in sorted(notification_stats.items()):
-            stats_text += f"• {item_name}: ✅{stats['sent']} ⏸️{stats['skipped']} ❌{stats['errors']}\n"
-    else:
-        stats_text += "_Нет данных по уведомлениям_\n"
-    
-    stats_text += f"\n*Кэши:*\n"
-    stats_text += f"• Автостоки: {len(user_autostocks_cache)} пользователей\n"
-    stats_text += f"• Подписки: {len(subscription_cache)} записей\n"
-    stats_text += f"• Уведомления: {len(user_sent_notifications)} пользователей\n"
-    stats_text += f"• Последние предметы: {len(item_last_seen)}\n"
-    
-    stats_text += f"\n*Система:*\n"
-    stats_text += f"• Бот работает: {'✅' if tracker.is_running else '❌'}\n"
-    
-    now = get_moscow_time()
-    next_check = get_next_check_time()
-    time_until = int((next_check - now).total_seconds())
-    stats_text += f"• След. проверка: через {time_until} сек\n"
-    
-    await update.effective_message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
+    await update.effective_message.reply_text(stats, parse_mode=ParseMode.MARKDOWN)
 
-
-def _keyboard_to_str(keyboard: InlineKeyboardMarkup) -> str:
-    try:
-        buttons_data = []
-        for row in keyboard.inline_keyboard:
-            row_data = []
-            for btn in row:
-                row_data.append(f"{btn.text}:{btn.callback_data}")
-            buttons_data.append("|".join(row_data))
-        return "||".join(buttons_data)
-    except:
-        return ""
-
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_message or not update.effective_user:
+        return
+    
+    help_text = (
+        "📚 *СПРАВКА*\n\n"
+        "📊 /stock - Текущий сток\n"
+        "🔔 /autostock - Управление автостоками\n"
+        "❓ /help - Эта справка\n\n"
+        "*Автостоки:*\n"
+        "Добавьте предметы в автостоки, и вы получите уведомление, "
+        "как только они появятся в стоке!\n\n"
+        "*Обновление:*\n"
+        "Стоки обновляются автоматически при каждом новом сообщении в Discord."
+    )
+    
+    await update.effective_message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
 async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1172,7 +808,7 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         if data == "as_seeds":
-            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
+            user_items = await parser.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in SEED_ITEMS_LIST:
                 is_tracking = item_name in user_items
@@ -1183,17 +819,15 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-            reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "🌱 *СЕМЕНА*\n\n"
-                "Нажмите на предмет, чтобы добавить/убрать из автостоков:",
-                reply_markup=reply_markup,
+                "🌱 *СЕМЕНА*\n\nНажмите чтобы добавить/убрать:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.MARKDOWN
             )
         
         elif data == "as_gear":
-            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
+            user_items = await parser.db.load_user_autostocks(user_id, use_cache=True)
             keyboard = []
             for item_name, item_info in GEAR_ITEMS_LIST:
                 is_tracking = item_name in user_items
@@ -1204,29 +838,26 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-            reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "⚔️ *СНАРЯЖЕНИЕ*\n\n"
-                "Нажмите на предмет, чтобы добавить/убрать из автостоков:",
-                reply_markup=reply_markup,
+                "⚔️ *СНАРЯЖЕНИЕ*\n\nНажмите чтобы добавить/убрать:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.MARKDOWN
             )
         
         elif data == "as_list":
-            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
+            user_items = await parser.db.load_user_autostocks(user_id, use_cache=True)
             if not user_items:
-                message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_\n\nДобавьте предметы через кнопки ниже."
+                message = "📋 *МОИ АВТОСТОКИ*\n\n_Нет отслеживаемых предметов_"
             else:
                 items_list = []
                 for item_name in sorted(user_items):
-                    item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "Unknown"})
+                    item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
                     items_list.append(f"{item_info['emoji']} *{item_name}* ({item_info['price']})")
                 message = f"📋 *МОИ АВТОСТОКИ* ({len(user_items)})\n\n" + "\n".join(items_list)
             
             keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="as_back")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
         
         elif data == "as_back":
             keyboard = [
@@ -1234,30 +865,26 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
                 [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
             ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            message = (
-                "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\n"
-                "Выберите категорию предметов для отслеживания."
-            )
-            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+            message = "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\nВыберите категорию."
+            await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
         
         elif data.startswith("t_"):
             item_name = ID_TO_NAME.get(data)
             if not item_name:
-                await query.answer("❌ Ошибка: предмет не найден", show_alert=True)
+                await query.answer("❌ Ошибка", show_alert=True)
                 return
             
             category = ITEMS_DATA.get(item_name, {}).get('category', 'seed')
-            user_items = await tracker.db.load_user_autostocks(user_id, use_cache=True)
+            user_items = await parser.db.load_user_autostocks(user_id, use_cache=True)
             
             if item_name in user_items:
                 user_items.discard(item_name)
-                asyncio.create_task(tracker.db.remove_user_autostock(user_id, item_name))
-                await query.answer(f"❌ {item_name} убран из автостоков", show_alert=False)
+                asyncio.create_task(parser.db.remove_user_autostock(user_id, item_name))
+                await query.answer(f"❌ {item_name} убран", show_alert=False)
             else:
                 user_items.add(item_name)
-                asyncio.create_task(tracker.db.save_user_autostock(user_id, item_name))
-                await query.answer(f"✅ {item_name} добавлен в автостоки", show_alert=False)
+                asyncio.create_task(parser.db.save_user_autostock(user_id, item_name))
+                await query.answer(f"✅ {item_name} добавлен", show_alert=False)
             
             items_list = SEED_ITEMS_LIST if category == 'seed' else GEAR_ITEMS_LIST
             keyboard = []
@@ -1270,329 +897,17 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     callback_data=safe_callback
                 )])
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="as_back")])
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            cache_key = (user_id, category)
-            new_keyboard_str = _keyboard_to_str(reply_markup)
-            old_keyboard_str = last_keyboard_cache.get(cache_key, "")
-            
-            if new_keyboard_str == old_keyboard_str:
-                return
-            
-            last_keyboard_cache[cache_key] = new_keyboard_str
             
             try:
-                await query.edit_message_reply_markup(reply_markup=reply_markup)
+                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
             except TelegramError:
-                try:
-                    category_text = "🌱 *СЕМЕНА*" if category == "seed" else "⚔️ *СНАРЯЖЕНИЕ*"
-                    await query.edit_message_text(
-                        f"{category_text}\n\nНажмите на предмет, чтобы добавить/убрать из автостоков:",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except:
-                    pass
+                pass
     
     except Exception as e:
-        logger.error(f"❌ Ошибка в autostock_callback: {e}", exc_info=True)
+        logger.error(f"❌ Callback: {e}")
 
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not update.effective_message:
-        return
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        return
-    
-    if update.effective_chat.type != ChatType.PRIVATE:
-        await update.effective_message.reply_text("❌ Рассылка доступна только в ЛС")
-        return
-    
-    await update.effective_message.reply_text(
-        "📢 *РАССЫЛКА ВСЕМ ПОЛЬЗОВАТЕЛЯМ*\n\n"
-        "Отправьте текст сообщения для рассылки.\n"
-        "Поддерживается Markdown форматирование.\n\n"
-        "Для отмены введите /cancel",
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    return BROADCAST_MESSAGE
-
-
-async def broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not update.effective_message or not update.message:
-        return ConversationHandler.END
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        return ConversationHandler.END
-    
-    message = update.message
-    
-    # Сохраняем всё сообщение целиком для пересылки
-    context.user_data['broadcast_message'] = message
-    context.user_data['broadcast_type'] = 'forward'  # Тип рассылки - пересылка
-    
-    # Формируем предпросмотр
-    preview_parts = ["📝 *ПРЕДПРОСМОТР СООБЩЕНИЯ:*\n"]
-    
-    if message.text:
-        preview_parts.append(f"Текст: {message.text[:200]}{'...' if len(message.text) > 200 else ''}")
-    if message.photo:
-        preview_parts.append("📷 Фото: да")
-    if message.video:
-        preview_parts.append("🎬 Видео: да")
-    if message.document:
-        preview_parts.append("📄 Документ: да")
-    if message.audio:
-        preview_parts.append("🎵 Аудио: да")
-    if message.voice:
-        preview_parts.append("🎤 Голосовое: да")
-    if message.sticker:
-        preview_parts.append("🎭 Стикер: да")
-    if message.animation:
-        preview_parts.append("🎞 GIF: да")
-    if message.reply_markup:
-        preview_parts.append("🔘 Кнопки: да")
-    
-    preview_parts.append("\nОтправить это сообщение всем пользователям?")
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Да, отправить", callback_data="bc_confirm"),
-            InlineKeyboardButton("❌ Отменить", callback_data="bc_cancel")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.effective_message.reply_text(
-        "\n".join(preview_parts),
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    return ConversationHandler.END
-
-
-async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        return
-    
-    data = query.data
-    
-    if data == "bc_cancel":
-        await query.edit_message_text("❌ Рассылка отменена")
-        return
-    
-    if data == "bc_confirm":
-        broadcast_message = context.user_data.get('broadcast_message')
-        broadcast_type = context.user_data.get('broadcast_type', 'text')
-        
-        if not broadcast_message:
-            await query.edit_message_text("❌ Ошибка: сообщение не найдено")
-            return
-        
-        await query.edit_message_text("📤 Начинаю рассылку...")
-        
-        users = await tracker.db.get_all_users()
-        
-        if not users:
-            await query.message.reply_text("❌ Пользователи не найдены")
-            return
-        
-        logger.info(f"📊 Начинаю рассылку для {len(users)} пользователей")
-        
-        sent = 0
-        failed = 0
-        blocked = 0
-        users_to_delete = []
-        
-        # Отправляем пакетами по 20 пользователей
-        batch_size = 20
-        for i in range(0, len(users), batch_size):
-            batch = users[i:i + batch_size]
-            
-            for user_id_to_send in batch:
-                try:
-                    # Копируем сообщение со всеми медиа, кнопками и форматированием
-                    await broadcast_message.copy(chat_id=user_id_to_send)
-                    sent += 1
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
-                        # Пользователь заблокировал бота
-                        blocked += 1
-                        users_to_delete.append(user_id_to_send)
-                        logger.debug(f"🚫 Пользователь {user_id_to_send} заблокировал бота")
-                    else:
-                        failed += 1
-                        logger.debug(f"❌ Не удалось отправить пользователю {user_id_to_send}: {e}")
-            
-            # Обновляем статус каждые 100 пользователей
-            if (i + batch_size) % 100 == 0 or i + batch_size >= len(users):
-                progress = min(i + batch_size, len(users))
-                try:
-                    await query.edit_message_text(
-                        f"📤 Рассылка в процессе...\n\n"
-                        f"Обработано: {progress}/{len(users)}\n"
-                        f"✅ Отправлено: {sent}\n"
-                        f"🚫 Заблокировали: {blocked}\n"
-                        f"❌ Ошибок: {failed}"
-                    )
-                except:
-                    pass
-            
-            await asyncio.sleep(0.05)
-        
-        # Удаляем заблокировавших пользователей из базы
-        if users_to_delete:
-            logger.info(f"🗑️ Начинаю удаление {len(users_to_delete)} заблокировавших пользователей")
-            deleted_count = 0
-            
-            for user_id_to_delete in users_to_delete:
-                # Удаляем автостоки пользователя
-                await tracker.db.delete_user_autostocks(user_id_to_delete)
-                # Удаляем самого пользователя
-                if await tracker.db.delete_user(user_id_to_delete):
-                    deleted_count += 1
-                
-                # Удаляем из кэшей
-                user_autostocks_cache.pop(user_id_to_delete, None)
-                user_autostocks_time.pop(user_id_to_delete, None)
-                subscription_cache.pop(user_id_to_delete, None)
-                user_sent_notifications.pop(user_id_to_delete, None)
-            
-            logger.info(f"✅ Удалено {deleted_count} пользователей из базы")
-        
-        report = (
-            f"✅ *РАССЫЛКА ЗАВЕРШЕНА*\n\n"
-            f"📊 Статистика:\n"
-            f"• Всего пользователей: {len(users)}\n"
-            f"• Отправлено: {sent}\n"
-            f"• Заблокировали бота: {blocked}\n"
-            f"• Других ошибок: {failed}\n"
-            f"• Удалено из базы: {len(users_to_delete)}"
-        )
-        
-        await query.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
-        logger.info(f"Рассылка завершена: {sent} успешно, {blocked} заблокировали, {failed} ошибок")
-
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message:
-        return ConversationHandler.END
-    
-    await update.effective_message.reply_text("❌ Операция отменена")
-    return ConversationHandler.END
-
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_user:
-        return
-    
-    await tracker.db.save_user(
-        update.effective_user.id, 
-        update.effective_user.username, 
-        update.effective_user.first_name
-    )
-    
-    channels_info = "\n".join([f"📢 {ch}" for ch in REQUIRED_CHANNELS]) if CHANNEL_ID else ""
-    welcome_message = (
-        "👋 *Добро пожаловать в Plants vs Brainrots Stock Tracker!*\n\n"
-        "🤖 Я помогу отслеживать сток предметов в игре:\n\n"
-        "📊 /stock - Посмотреть текущий сток\n"
-        "🌤️ /weather - Узнать погоду в игре\n"
-        "🔔 /autostock - Настроить автостоки (уведомления)\n"
-        f"\n{channels_info}\n"
-    )
-    await update.effective_message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN)
-
-async def periodic_stock_check(application: Application):
-    """ОПТИМИЗАЦИЯ: Защита от падений с автоматическим перезапуском"""
-    if tracker.is_running:
-        return
-    
-    tracker.is_running = True
-    logger.info("🚀 Периодическая проверка запущена")
-    
-    consecutive_errors = 0
-    max_consecutive_errors = 5
-    
-    try:
-        initial_sleep = calculate_sleep_time()
-        logger.info(f"⏰ Первая проверка через {int(initial_sleep)} сек")
-        await asyncio.sleep(initial_sleep)
-
-        check_count = 0
-        while tracker.is_running:
-            try:
-                now = get_moscow_time()
-                check_count += 1
-                logger.info(f"🔍 Проверка #{check_count} - {now.strftime('%H:%M:%S')}")
-                
-                if check_count % 12 == 0:
-                    _cleanup_cache()
-                
-                stock_data = await tracker.fetch_stock(use_cache=False)
-                
-                if stock_data:
-                    tasks = []
-                    if CHANNEL_ID:
-                        tasks.append(tracker.check_for_notifications(stock_data, application.bot, CHANNEL_ID))
-                    tasks.append(tracker.check_user_autostocks(stock_data, application.bot))
-                    
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    logger.info(f"✅ Проверка #{check_count} завершена успешно")
-                    consecutive_errors = 0  # Сбрасываем счетчик ошибок
-                else:
-                    logger.warning(f"⚠️ Проверка #{check_count}: нет данных")
-                    consecutive_errors += 1
-                
-                # Если слишком много ошибок подряд - перезапускаем сессии
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(f"🔄 {consecutive_errors} ошибок подряд - перезапуск сессий")
-                    try:
-                        await tracker.close_session()
-                        await asyncio.sleep(5)
-                        await tracker.init_session()
-                        consecutive_errors = 0
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка перезапуска сессий: {e}")
-                
-                sleep_time = calculate_sleep_time()
-                logger.info(f"😴 Следующая проверка через {int(sleep_time)} сек")
-                await asyncio.sleep(sleep_time)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"❌ Ошибка проверки #{check_count}: {e}", exc_info=True)
-                await asyncio.sleep(60)
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка в periodic_stock_check: {e}", exc_info=True)
-    finally:
-        tracker.is_running = False
-        logger.info("🛑 Периодическая проверка остановлена")
-
-
-async def post_init(application: Application):
-    asyncio.create_task(periodic_stock_check(application))
-
-
+# ========== FLASK ==========
 flask_app = Flask(__name__)
-
 
 @flask_app.route("/", methods=["GET", "HEAD"])
 @flask_app.route("/ping", methods=["GET", "HEAD"])
@@ -1600,77 +915,89 @@ def ping():
     if flask_request.method == "HEAD":
         return "", 200
     
-    now = get_moscow_time()
-    next_check = get_next_check_time()
-    
     return jsonify({
         "status": "ok",
         "time": datetime.utcnow().isoformat() + "Z",
-        "moscow_time": now.strftime("%H:%M:%S"),
-        "next_check": next_check.strftime("%H:%M:%S"),
-        "bot": "PVB Stock Tracker v2.0",
-        "is_running": tracker.is_running,
-        "cache_size": len(user_autostocks_cache),
-        "subscription_cache": len(subscription_cache)
+        "moscow_time": get_moscow_time().strftime("%H:%M:%S"),
+        "bot": "PVB Stock Tracker v3.0",
+        "discord": discord_client.is_ready() if discord_client else False,
+        "cache_size": len(user_autostocks_cache)
     }), 200
-
 
 @flask_app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "healthy", "running": tracker.is_running}), 200
+    return jsonify({
+        "status": "healthy",
+        "discord": discord_client.is_ready() if discord_client else False
+    }), 200
 
+# ========== ИНИЦИАЛИЗАЦИЯ ==========
+async def post_init(application: Application):
+    parser.telegram_bot = application.bot
+    logger.info("✅ Telegram инициализирован")
 
+# ========== MAIN ==========
 def main():
     logger.info("="*60)
-    logger.info("🌱 Plants vs Brainrots Stock Tracker Bot v2.0")
+    logger.info("🌱 PVB Stock Tracker Bot v3.0")
     logger.info("="*60)
-
+    
     build_item_id_mappings()
-
-    global telegram_app
+    
+    global discord_client, telegram_app
+    
+    discord_client = PVBDiscordClient()
     telegram_app = Application.builder().token(BOT_TOKEN).build()
-
+    
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(CommandHandler("stock", stock_command))
-    telegram_app.add_handler(CommandHandler("weather", weather_command))
     telegram_app.add_handler(CommandHandler("autostock", autostock_command))
     telegram_app.add_handler(CommandHandler("stats", stats_command))
-    
-    broadcast_handler = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", broadcast_command)],
-        states={
-            BROADCAST_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_received),
-                MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE | filters.Sticker.ALL | filters.ANIMATION, broadcast_message_received)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_command)]
-    )
-    telegram_app.add_handler(broadcast_handler)
-    
+    telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="^check_subscription$"))
     telegram_app.add_handler(CallbackQueryHandler(autostock_callback, pattern="^as_|^t_"))
-    telegram_app.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^bc_"))
-
-    telegram_app.post_init = post_init
-
-    async def shutdown_callback(app: Application):
-        logger.info("🛑 Остановка бота")
-        tracker.is_running = False
-        try:
-            await tracker.close_session()
-        except Exception as e:
-            logger.error(f"❌ Ошибка закрытия: {e}")
-
-    telegram_app.post_shutdown = shutdown_callback
-
-    logger.info("🔄 Режим: Polling")
     
-    import threading
+    telegram_app.post_init = post_init
+    
+    async def shutdown_callback(app: Application):
+        logger.info("🛑 Остановка")
+        if discord_client:
+            await discord_client.close()
+        if http_session and not http_session.closed:
+            await http_session.close()
+    
+    telegram_app.post_shutdown = shutdown_callback
+    
+    async def run_both():
+        discord_task = asyncio.create_task(discord_client.start(DISCORD_TOKEN))
+        
+        while not discord_client.is_ready():
+            await asyncio.sleep(0.5)
+        
+        logger.info("✅ Discord готов")
+        
+        await telegram_app.initialize()
+        await telegram_app.start()
+        await telegram_app.updater.start_polling(allowed_updates=None, drop_pending_updates=True)
+        
+        logger.info("🚀 Бот запущен!")
+        logger.info(f"👤 Admin: {ADMIN_ID}")
+        logger.info(f"📢 Каналы: {', '.join(REQUIRED_CHANNELS)}")
+        logger.info(f"📡 Discord канал: {DISCORD_STOCK_CHANNEL_ID}")
+        logger.info("="*60)
+        
+        try:
+            await discord_task
+        except KeyboardInterrupt:
+            pass
+        finally:
+            await telegram_app.updater.stop()
+            await telegram_app.stop()
+            await telegram_app.shutdown()
     
     def run_flask_server():
         port = int(os.getenv("PORT", "5000"))
-        logger.info(f"🚀 Flask запущен на порту {port}")
+        logger.info(f"🚀 Flask: {port}")
         import logging as flask_logging
         flask_log = flask_logging.getLogger('werkzeug')
         flask_log.setLevel(flask_logging.ERROR)
@@ -1679,13 +1006,10 @@ def main():
     flask_thread = threading.Thread(target=run_flask_server, daemon=True)
     flask_thread.start()
     
-    logger.info("🚀 Бот запущен успешно!")
-    logger.info(f"👤 Admin ID: {ADMIN_ID}")
-    logger.info(f"📢 Обязательные каналы: {', '.join(REQUIRED_CHANNELS)}")
-    logger.info(f"⏰ Интервал проверки: каждые {CHECK_INTERVAL_MINUTES} минут")
-    logger.info("="*60)
-    telegram_app.run_polling(allowed_updates=None, drop_pending_updates=True)
-
+    try:
+        asyncio.run(run_both())
+    except KeyboardInterrupt:
+        logger.info("⚠️ Остановка")
 
 if __name__ == "__main__":
     main()
