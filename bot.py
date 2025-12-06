@@ -584,11 +584,8 @@ parser = DiscordStockParser()
 # ========== DISCORD CLIENT ==========
 class PVBDiscordClient(discord.Client):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.messages = True
-        intents.message_content = True
-        intents.guilds = True
-        super().__init__(intents=intents)
+        # discord.py-self не использует intents
+        super().__init__()
         self.stock_channel = None
     
     async def on_ready(self):
