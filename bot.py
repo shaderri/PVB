@@ -342,11 +342,11 @@ class DiscordStockParser:
             line = line.strip()
             
             # Определяем секции
-            if 'Seeds Stock' in line or '🌱' in line and 'Seeds' in line:
+            if 'Seeds Stock' in line or ('🌱' in line and 'Seeds' in line):
                 current_section = 'seeds'
                 logger.info("📍 Найдена секция: Seeds")
                 continue
-            elif 'Gear Stock' in line or '⚔️' in line and 'Gear' in line:
+            elif 'Gear Stock' in line or ('⚔️' in line and 'Gear' in line):
                 current_section = 'gear'
                 logger.info("📍 Найдена секция: Gear")
                 continue
@@ -364,6 +364,27 @@ class DiscordStockParser:
                 
                 # Ищем паттерн: цифра + x + название
                 match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?$', clean_line, re.IGNORECASE)
+                
+                # ИСПРАВЛЕНИЕ: Проверяем что match не None
+                if match:
+                    try:
+                        quantity = int(match.group(1))
+                        raw_name = match.group(2).strip()
+                        
+                        # Нормализуем название
+                        item_name = self.normalize_item_name(raw_name)
+                        
+                        if item_name and item_name in ITEMS_DATA:
+                            logger.info(f"✅ Найден предмет: {item_name} x{quantity}")
+                            result[current_section].append((item_name, quantity))
+                        else:
+                            logger.warning(f"⚠️ Неизвестный предмет: '{raw_name}'")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка парсинга строки '{line}': {e}")
+                else:
+                    logger.debug(f"⏭️ Не найден паттерн в: '{clean_line}'")
+        
+        return result
     
     def normalize_item_name(self, raw_name: str) -> Optional[str]:
         """Нормализует название предмета"""
