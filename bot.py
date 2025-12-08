@@ -73,7 +73,7 @@ ITEMS_DATA = {
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
-    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
+    "Carrot Launcher": {"emoji": "🔫", "price": "$500,000", "category": "gear"}
 }
 
 NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
@@ -420,7 +420,7 @@ class DiscordStockParser:
             'carnivorous plant': 'Carnivorous Plant',
             'carnivorous': 'Carnivorous Plant',
             'mr carrot': 'Mr Carrot',
-            'carrot': 'Mr Carrot',
+            'Mr Carrot': 'Mr Carrot',
             'tomatrio': 'Tomatrio',
             'tomato': 'Tomatrio',
             'shroombino': 'Shroombino',
