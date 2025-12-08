@@ -355,18 +355,249 @@ class DiscordStockParser:
                 continue
             
             # Парсим предметы
-            # Формат: 4x 🌵 Cactus Seed или 1x 🥕 Carrot Launcher
+            # Формат: **4x** <:emoji:id> Cactus Seed
             if 'x' in line and any(char.isdigit() for char in line):
-                # Убираем эмодзи для парсинга
-                clean_line = line
+                # Убираем Discord эмодзи (<:name:id>)
+                clean_line = re.sub(r'<:[^:]+:\d+>', '', line)
+                
+                # Убираем markdown форматирование
+                clean_line = clean_line.replace('**', '').replace('*', '').replace('__', '').replace('_', '')
+                
+                # Убираем Unicode эмодзи
                 for emoji in ['🌵', '🍓', '🎃', '🌻', '🐉', '🍆', '🍉', '🍇', '🥥', '🪴', '🥕', '🍅', '🍄', '🥭', '🍋', '⭐', '🥬', '🪣', '❄️', '🍌', '🌬️', '💧', '🔥']:
                     clean_line = clean_line.replace(emoji, '')
                 
-                # Ищем паттерн: цифра + x + название
-                match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?$', clean_line, re.IGNORECASE)
+                # Очищаем лишние пробелы
+                clean_line = ' '.join(clean_line.split())
                 
-                # ИСПРАВЛЕНИЕ: Проверяем что match не None
-                if match:
+                logger.debug(f"🔍 Очищенная строка: '{clean_line}'")
+                
+                # Ищем паттерн: цифра + x + название
+                match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?', clean_line, re.IGNORECASE)
+    
+    def normalize_item_name(self, raw_name: str) -> Optional[str]:
+        """Нормализует название предмета"""
+        raw_name = raw_name.strip().lower()
+        
+        # Убираем лишние слова
+        raw_name = raw_name.replace(' seed', '').replace(' gun', '').replace(' launcher', '').replace(' grenade', '').replace(' bucket', '').replace(' blower', '')
+        raw_name = raw_name.strip()
+        
+        # Маппинг для нормализации
+        name_map = {
+            'cactus': 'Cactus',
+            'strawberry': 'Strawberry',
+            'pumpkin': 'Pumpkin',
+            'sunflower': 'Sunflower',
+            'dragon fruit': 'Dragon Fruit',
+            'dragon': 'Dragon Fruit',
+            'eggplant': 'Eggplant',
+            'watermelon': 'Watermelon',
+            'grape': 'Grape',
+            'grapes': 'Grape',
+            'cocotank': 'Cocotank',
+            'coco': 'Cocotank',
+            'carnivorous plant': 'Carnivorous Plant',
+            'carnivorous': 'Carnivorous Plant',
+            'mr carrot': 'Mr Carrot',
+            'carrot': 'Mr Carrot',
+            'tomatrio': 'Tomatrio',
+            'tomato': 'Tomatrio',
+            'shroombino': 'Shroombino',
+            'mushroom': 'Shroombino',
+            'mango': 'Mango',
+            'king limone': 'King Limone',
+            'limone': 'King Limone',
+            'starfruit': 'Starfruit',
+            'star': 'Starfruit',
+            'brussel sprouts': 'Brussel Sprouts',
+            'brussel': 'Brussel Sprouts',
+            'sprouts': 'Brussel Sprouts',
+            'water bucket': 'Water Bucket',
+            'water': 'Water Bucket',
+            'bucket': 'Water Bucket',
+            'frost grenade': 'Frost Grenade',
+            'frost': 'Frost Grenade',
+            'grenade': 'Frost Grenade',
+            'banana gun': 'Banana Gun',
+            'banana': 'Banana Gun',
+            'frost blower': 'Frost Blower',
+            'blower': 'Frost Blower',
+            'carrot launcher': 'Carrot Launcher',
+            'launcher': 'Carrot Launcher'
+        }
+        
+        return name_map.get(raw_name)
+    
+    def format_stock_message(self, stock_data: Dict) -> str:
+        if not stock_data:
+            return "❌ *Не удалось получить данные*"
+        
+        message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
+        
+        # Семена
+        seeds = stock_data.get('seeds', [])
+        message += "🌱 *СЕМЕНА:*\n"
+        if seeds:
+            for item_name, quantity in seeds:
+                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
+        else:
+            message += "_Пусто_\n"
+        
+        message += "\n"
+        
+        # Снаряжение
+        gear = stock_data.get('gear', [])
+        message += "⚔️ *СНАРЯЖЕНИЕ:*\n"
+        if gear:
+            for item_name, quantity in gear:
+                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
+        else:
+            message += "_Пусто_\n"
+        
+        current_time = get_moscow_time().strftime("%H:%M:%S")
+        message += f"\n🕒 _Обновлено: {current_time} МСК_"
+        return message
+    
+    def should_notify_item(self, item_name: str) -> bool:
+        if item_name not in item_last_seen:
+            return True
+        now = get_moscow_time()
+        last_time = item_last_seen[item_name]
+        return (now - last_time).total_seconds() >= 120
+    
+    def can_send_to_user(self, user_id: int, item_name: str) -> bool:
+        if user_id not in user_sent_notifications:
+            return True
+        if item_name not in user_sent_notifications[user_id]:
+            return True
+        now = get_moscow_time()
+        last_time = user_sent_notifications[user_id][item_name]
+        return (now - last_time).total_seconds() >= USER_NOTIFICATION_COOLDOWN
+    
+    async def send_autostock_notification(self, bot: Bot, user_id: int, item_name: str, count: int) -> bool:
+        try:
+            item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+            current_time = get_moscow_time().strftime("%H:%M:%S")
+            
+            message = (
+                f"🔔 *АВТОСТОК - {item_name}!*\n\n"
+                f"{item_info['emoji']} *{item_name}*\n"
+                f"📦 Количество: *x{count}*\n"
+                f"💰 Цена: {item_info['price']}\n"
+                f"🕒 {current_time} МСК"
+            )
+            
+            await bot.send_message(chat_id=user_id, text=message, parse_mode=ParseMode.MARKDOWN)
+            
+            if user_id not in user_sent_notifications:
+                user_sent_notifications[user_id] = {}
+            user_sent_notifications[user_id][item_name] = get_moscow_time()
+            
+            return True
+        except TelegramError as e:
+            error_msg = str(e).lower()
+            if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
+                logger.debug(f"🚫 {user_id} заблокировал бота")
+                asyncio.create_task(self.cleanup_blocked_user(user_id))
+                return False
+            else:
+                logger.debug(f"⚠️ Ошибка отправки {user_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка {user_id}: {e}")
+            return False
+    
+    async def cleanup_blocked_user(self, user_id: int):
+        try:
+            await self.db.delete_user_autostocks(user_id)
+            await self.db.delete_user(user_id)
+            
+            user_autostocks_cache.pop(user_id, None)
+            user_autostocks_time.pop(user_id, None)
+            subscription_cache.pop(user_id, None)
+            user_sent_notifications.pop(user_id, None)
+            
+            logger.info(f"✅ Очищен {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Очистка {user_id}: {e}")
+    
+    async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
+        if not stock_data:
+            return
+        
+        current_stock = {}
+        for stock_type in ['seeds', 'gear']:
+            for item_name, quantity in stock_data.get(stock_type, []):
+                if quantity > 0:
+                    current_stock[item_name] = quantity
+        
+        if not current_stock:
+            logger.info("📭 Нет предметов в стоке")
+            return
+        
+        logger.info(f"📦 Предметы: {list(current_stock.keys())}")
+        
+        # Параллельная загрузка пользователей
+        item_names = list(current_stock.keys())
+        user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
+        users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
+        
+        item_users_map = {}
+        for item_name, result in zip(item_names, users_results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ {item_name}: {result}")
+                continue
+            if result:
+                item_users_map[item_name] = result
+                logger.info(f"👥 {item_name}: {len(result)} пользователей")
+        
+        # Отправка уведомлений
+        for item_name, count in current_stock.items():
+            if not self.should_notify_item(item_name):
+                logger.debug(f"⏸️ {item_name}: кулдаун")
+                continue
+            
+            users = item_users_map.get(item_name, [])
+            if not users:
+                continue
+            
+            logger.info(f"🔔 {item_name}: отправка {len(users)} пользователям")
+            item_last_seen[item_name] = get_moscow_time()
+            
+            sent = 0
+            skipped = 0
+            errors = 0
+            
+            # Отправка пакетами
+            batch_size = 30
+            for i in range(0, len(users), batch_size):
+                batch = users[i:i + batch_size]
+                send_tasks = []
+                
+                for user_id in batch:
+                    if not self.can_send_to_user(user_id, item_name):
+                        skipped += 1
+                        continue
+                    send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
+                
+                if send_tasks:
+                    results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                    for result in results:
+                        if result is True:
+                            sent += 1
+                        elif isinstance(result, Exception):
+                            errors += 1
+                    
+                    if i + batch_size < len(users):
+                        await asyncio.sleep(0.05)
+            
+            logger.info(f"✅ {item_name}: отправлено {sent}, пропущено {skipped}, ошибок {errors}")
+            await asyncio.sleep(0.02)
+                
+            if match:
                     try:
                         quantity = int(match.group(1))
                         raw_name = match.group(2).strip()
@@ -378,10 +609,10 @@ class DiscordStockParser:
                             logger.info(f"✅ Найден предмет: {item_name} x{quantity}")
                             result[current_section].append((item_name, quantity))
                         else:
-                            logger.warning(f"⚠️ Неизвестный предмет: '{raw_name}'")
+                            logger.warning(f"⚠️ Неизвестный предмет: '{raw_name}' (из строки: '{line}')")
                     except Exception as e:
                         logger.error(f"❌ Ошибка парсинга строки '{line}': {e}")
-                else:
+            else:
                     logger.debug(f"⏭️ Не найден паттерн в: '{clean_line}'")
         
         return result
