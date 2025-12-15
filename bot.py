@@ -320,10 +320,10 @@ class DiscordStockParser:
         self.telegram_bot: Optional[Bot] = None
     
     def parse_stock_message(self, content: str, embeds: List[discord.Embed]) -> Dict:
-        """Парсит сообщение от Stock Notifier бота"""
+        """Парсит сообщение от Stock Notifier бота - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
         result = {"seeds": [], "gear": []}
         
-        # Парсим embeds (основной источник данных)
+        # Собираем весь текст
         full_text = content + "\n"
         for embed in embeds:
             if embed.title:
@@ -333,87 +333,80 @@ class DiscordStockParser:
             for field in embed.fields:
                 full_text += f"{field.name}\n{field.value}\n"
         
-        logger.info(f"🔍 Парсинг текста: {full_text[:200]}...")
+        logger.info(f"🔍 Парсинг полного текста ({len(full_text)} символов)")
         
+        # Разбиваем на строки
         lines = full_text.split('\n')
-        current_section = None
         
-        for line in lines:
+        for i, line in enumerate(lines):
             line = line.strip()
-            
-            # Определяем секции
-            if 'Seeds Stock' in line or '🌱' in line and 'Seeds' in line:
-                current_section = 'seeds'
-                logger.info("📍 Найдена секция: Seeds")
-                continue
-            elif 'Gear Stock' in line or '⚔️' in line and 'Gear' in line:
-                current_section = 'gear'
-                logger.info("📍 Найдена секция: Gear")
+            if not line:
                 continue
             
-            if not current_section:
-                continue
+            # Ищем паттерн: "+X stock" на следующей строке после названия предмета
+            # Формат Discord:
+            # 🌻 Sunflower
+            # +2 stock (@Sunflower)
             
-            # Парсим предметы
-            # Формат: 4x 🌵 Cactus Seed или 1x 🥕 Carrot Launcher
-            if 'x' in line and any(char.isdigit() for char in line):
-                # Убираем эмодзи для парсинга
-                clean_line = line
-                for emoji in ['🌵', '🍓', '🎃', '🌻', '🐉', '🍆', '🍉', '🍇', '🥥', '🪴', '🥕', '🍅', '🍄', '🥭', '🍋', '⭐', '🥬', '🪣', '❄️', '🍌', '🌬️', '💧', '🔥']:
-                    clean_line = clean_line.replace(emoji, '')
+            # Проверяем есть ли в строке "+X stock"
+            stock_match = re.search(r'\+(\d+)\s+stock', line, re.IGNORECASE)
+            
+            if stock_match:
+                quantity = int(stock_match.group(1))
                 
-                # Ищем паттерн: цифра + x + название
-                match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?$', clean_line, re.IGNORECASE)
+                # Ищем название предмета в предыдущей строке
+                if i > 0:
+                    prev_line = lines[i - 1].strip()
+                    # Убираем эмодзи из названия
+                    item_text = re.sub(r'[🌵🍓🎃🌻🐉🍆🍉🍇🥥🪴🥕🍅🍄🥭🍋⭐🥬🪣❄️🍌🌬️]', '', prev_line).strip()
+                    
+                    # Нормализуем название
+                    item_name = self.normalize_item_name(item_text)
+                    
+                    if item_name:
+                        category = ITEMS_DATA[item_name]['category']
+                        result[f"{category}s"].append((item_name, quantity))
+                        logger.info(f"✅ Найден: {item_name} x{quantity} ({category})")
+                    else:
+                        logger.warning(f"⚠️ Не распознан предмет: '{item_text}' из строки: '{prev_line}'")
+        
+        logger.info(f"📊 Результат парсинга: {len(result['seeds'])} семян, {len(result['gear'])} снаряжения")
+        return result
     
     def normalize_item_name(self, raw_name: str) -> Optional[str]:
         """Нормализует название предмета"""
         raw_name = raw_name.strip().lower()
         
         # Убираем лишние слова
-        raw_name = raw_name.replace(' seed', '').replace(' gun', '').replace(' launcher', '').replace(' grenade', '').replace(' bucket', '').replace(' blower', '')
+        raw_name = raw_name.replace(' seed', '').replace(' gun', '').replace(' launcher', '')
+        raw_name = raw_name.replace(' grenade', '').replace(' bucket', '').replace(' blower', '')
         raw_name = raw_name.strip()
         
-        # Маппинг для нормализации
+        # Прямое сопоставление с названиями из ITEMS_DATA
+        for item_name in ITEMS_DATA.keys():
+            if item_name.lower() == raw_name:
+                return item_name
+        
+        # Маппинг для вариаций
         name_map = {
-            'cactus': 'Cactus',
-            'strawberry': 'Strawberry',
-            'pumpkin': 'Pumpkin',
-            'sunflower': 'Sunflower',
-            'dragon fruit': 'Dragon Fruit',
             'dragon': 'Dragon Fruit',
-            'eggplant': 'Eggplant',
-            'watermelon': 'Watermelon',
-            'grape': 'Grape',
-            'grapes': 'Grape',
-            'cocotank': 'Cocotank',
             'coco': 'Cocotank',
-            'carnivorous plant': 'Carnivorous Plant',
             'carnivorous': 'Carnivorous Plant',
             'mr carrot': 'Mr Carrot',
             'carrot': 'Mr Carrot',
-            'tomatrio': 'Tomatrio',
             'tomato': 'Tomatrio',
-            'shroombino': 'Shroombino',
             'mushroom': 'Shroombino',
-            'mango': 'Mango',
-            'king limone': 'King Limone',
             'limone': 'King Limone',
-            'starfruit': 'Starfruit',
+            'king lemon': 'King Limone',
             'star': 'Starfruit',
-            'brussel sprouts': 'Brussel Sprouts',
             'brussel': 'Brussel Sprouts',
             'sprouts': 'Brussel Sprouts',
-            'water bucket': 'Water Bucket',
             'water': 'Water Bucket',
             'bucket': 'Water Bucket',
-            'frost grenade': 'Frost Grenade',
             'frost': 'Frost Grenade',
             'grenade': 'Frost Grenade',
-            'banana gun': 'Banana Gun',
             'banana': 'Banana Gun',
-            'frost blower': 'Frost Blower',
             'blower': 'Frost Blower',
-            'carrot launcher': 'Carrot Launcher',
             'launcher': 'Carrot Launcher'
         }
         
@@ -425,7 +418,7 @@ class DiscordStockParser:
         
         message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
         
-        # Только семена
+        # Семена
         seeds = stock_data.get('seeds', [])
         message += "🌱 *СЕМЕНА:*\n"
         if seeds:
@@ -516,7 +509,7 @@ class DiscordStockParser:
             logger.info("📭 Нет предметов в стоке")
             return
         
-        logger.info(f"📦 Предметы: {list(current_stock.keys())}")
+        logger.info(f"📦 Предметы в стоке: {list(current_stock.keys())}")
         
         # Параллельная загрузка пользователей
         item_names = list(current_stock.keys())
@@ -580,15 +573,14 @@ parser = DiscordStockParser()
 # ========== DISCORD CLIENT ==========
 class PVBDiscordClient(discord.Client):
     def __init__(self):
-        # discord.py-self не использует intents
         super().__init__()
         self.stock_channel = None
     
     async def on_ready(self):
-        logger.info(f'✅ Discord: {self.user}')
+        logger.info(f'✅ Discord подключен: {self.user}')
         self.stock_channel = self.get_channel(DISCORD_STOCK_CHANNEL_ID)
         if self.stock_channel:
-            logger.info(f"✅ Канал стоков: {self.stock_channel.name}")
+            logger.info(f"✅ Канал стоков найден: {self.stock_channel.name}")
         else:
             logger.error("❌ Канал стоков не найден!")
     
@@ -605,23 +597,25 @@ class PVBDiscordClient(discord.Client):
             logger.debug("⏭️ Пропущен StickyBot")
             return
         
-        # Проверяем что это stock_guru
+        # Проверяем что это stock сообщение
         content_lower = message.content.lower()
         has_stock_content = ('restock' in content_lower or 'stock' in content_lower)
         
         if not has_stock_content:
-            logger.debug(f"⏭️ Не restock сообщение от {message.author.name}")
+            logger.debug(f"⏭️ Не stock сообщение от {message.author.name}")
             return
         
-        logger.info(f"📨 Новое RESTOCK сообщение от {message.author.name}")
+        logger.info(f"📨 ===== НОВОЕ RESTOCK СООБЩЕНИЕ =====")
+        logger.info(f"От: {message.author.name}")
+        logger.info(f"Содержимое: {message.content[:200]}")
         
         try:
             # Парсим сообщение
             stock_data = parser.parse_stock_message(message.content, message.embeds)
             
-            if not stock_data['seeds']:
+            if not stock_data['seeds'] and not stock_data['gear']:
                 logger.warning("⚠️ Не удалось распарсить стоки")
-                logger.debug(f"Содержимое: {message.content[:500]}")
+                logger.debug(f"Полное содержимое:\n{message.content}")
                 return
             
             # Обновляем кэш
@@ -629,13 +623,13 @@ class PVBDiscordClient(discord.Client):
             stock_cache = stock_data
             stock_cache_time = get_moscow_time()
             
-            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян")
+            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
             
             # Отправляем автосток уведомления
             if parser.telegram_bot:
                 await parser.check_user_autostocks(stock_data, parser.telegram_bot)
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки: {e}", exc_info=True)
+            logger.error(f"❌ Ошибка обработки сообщения: {e}", exc_info=True)
     
     async def fetch_latest_stock(self) -> Dict:
         """Получение последних стоков из истории"""
@@ -644,23 +638,35 @@ class PVBDiscordClient(discord.Client):
         now = get_moscow_time()
         if stock_cache and stock_cache_time:
             if (now - stock_cache_time).total_seconds() < STOCK_CACHE_SECONDS:
+                logger.debug("📦 Возврат из кэша")
                 return stock_cache
         
         if not self.stock_channel:
+            logger.error("❌ Канал стоков недоступен")
             return {"seeds": [], "gear": []}
         
         try:
-            async for msg in self.stock_channel.history(limit=10):
-                if msg.author.bot and 'restock' in msg.content.lower():
-                    stock_data = parser.parse_stock_message(msg.content, msg.embeds)
-                    if stock_data['seeds']:
-                        stock_cache = stock_data
-                        stock_cache_time = now
-                        return stock_data
+            logger.info("🔍 Поиск последнего stock сообщения в истории...")
+            async for msg in self.stock_channel.history(limit=20):
+                if msg.author.bot:
+                    if 'StickyBot' in str(msg.author.name):
+                        continue
+                    
+                    content_lower = msg.content.lower()
+                    if 'restock' in content_lower or 'stock' in content_lower:
+                        logger.info(f"✅ Найдено stock сообщение от {msg.author.name}")
+                        stock_data = parser.parse_stock_message(msg.content, msg.embeds)
+                        
+                        if stock_data['seeds'] or stock_data['gear']:
+                            stock_cache = stock_data
+                            stock_cache_time = now
+                            logger.info(f"📦 Загружено: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
+                            return stock_data
             
+            logger.warning("⚠️ Stock сообщения не найдены в истории")
             return {"seeds": [], "gear": []}
         except Exception as e:
-            logger.error(f"❌ fetch_latest_stock: {e}")
+            logger.error(f"❌ fetch_latest_stock: {e}", exc_info=True)
             return {"seeds": [], "gear": []}
 
 # ========== КОМАНДЫ ==========
@@ -920,7 +926,7 @@ def ping():
         "status": "ok",
         "time": datetime.utcnow().isoformat() + "Z",
         "moscow_time": get_moscow_time().strftime("%H:%M:%S"),
-        "bot": "PVB Stock Tracker v3.0",
+        "bot": "PVB Stock Tracker v3.1",
         "discord": discord_client.is_ready() if discord_client else False,
         "cache_size": len(user_autostocks_cache)
     }), 200
@@ -935,12 +941,12 @@ def health():
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 async def post_init(application: Application):
     parser.telegram_bot = application.bot
-    logger.info("✅ Telegram инициализирован")
+    logger.info("✅ Telegram bot инициализирован")
 
 # ========== MAIN ==========
 def main():
     logger.info("="*60)
-    logger.info("🌱 PVB Stock Tracker Bot v3.0")
+    logger.info("🌱 PVB Stock Tracker Bot v3.1 - FIXED PARSER")
     logger.info("="*60)
     
     build_item_id_mappings()
@@ -961,7 +967,7 @@ def main():
     telegram_app.post_init = post_init
     
     async def shutdown_callback(app: Application):
-        logger.info("🛑 Остановка")
+        logger.info("🛑 Остановка бота...")
         if discord_client:
             await discord_client.close()
         if http_session and not http_session.closed:
@@ -975,16 +981,16 @@ def main():
         while not discord_client.is_ready():
             await asyncio.sleep(0.5)
         
-        logger.info("✅ Discord готов")
+        logger.info("✅ Discord клиент готов к работе")
         
         await telegram_app.initialize()
         await telegram_app.start()
         await telegram_app.updater.start_polling(allowed_updates=None, drop_pending_updates=True)
         
-        logger.info("🚀 Бот запущен!")
-        logger.info(f"👤 Admin: {ADMIN_ID}")
-        logger.info(f"📢 Каналы: {', '.join(REQUIRED_CHANNELS)}")
-        logger.info(f"📡 Discord канал: {DISCORD_STOCK_CHANNEL_ID}")
+        logger.info("🚀 БОТ УСПЕШНО ЗАПУЩЕН!")
+        logger.info(f"👤 Admin ID: {ADMIN_ID}")
+        logger.info(f"📢 Обязательные каналы: {', '.join(REQUIRED_CHANNELS)}")
+        logger.info(f"📡 Discord канал стоков: {DISCORD_STOCK_CHANNEL_ID}")
         logger.info("="*60)
         
         try:
@@ -998,7 +1004,7 @@ def main():
     
     def run_flask_server():
         port = int(os.getenv("PORT", "5000"))
-        logger.info(f"🚀 Flask: {port}")
+        logger.info(f"🚀 Flask сервер запущен на порту {port}")
         import logging as flask_logging
         flask_log = flask_logging.getLogger('werkzeug')
         flask_log.setLevel(flask_logging.ERROR)
@@ -1010,7 +1016,7 @@ def main():
     try:
         asyncio.run(run_both())
     except KeyboardInterrupt:
-        logger.info("⚠️ Остановка")
+        logger.info("⚠️ Получен сигнал остановки")
 
 if __name__ == "__main__":
     main()
