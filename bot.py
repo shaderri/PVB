@@ -31,7 +31,7 @@ AUTOSTOCKS_URL = f"{SUPABASE_URL}/rest/v1/user_autostocks"
 USERS_URL = f"{SUPABASE_URL}/rest/v1/bot_users"
 
 # Discord канал стоков
-DISCORD_STOCK_CHANNEL_ID = 1421168434414092328
+DISCORD_STOCK_CHANNEL_ID = 1407975317682917457
 
 STOCK_CACHE_SECONDS = 20
 USER_NOTIFICATION_COOLDOWN = 180
@@ -73,7 +73,7 @@ ITEMS_DATA = {
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
     "Frost Blower": {"emoji": "🌬️", "price": "$125,000", "category": "gear"},
-    "Carrot Launcher": {"emoji": "🔫", "price": "$500,000", "category": "gear"}
+    "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
 NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
@@ -342,11 +342,11 @@ class DiscordStockParser:
             line = line.strip()
             
             # Определяем секции
-            if 'Seeds Stock' in line or ('🌱' in line and 'Seeds' in line):
+            if 'Seeds Stock' in line or '🌱' in line and 'Seeds' in line:
                 current_section = 'seeds'
                 logger.info("📍 Найдена секция: Seeds")
                 continue
-            elif 'Gear Stock' in line or ('⚔️' in line and 'Gear' in line):
+            elif 'Gear Stock' in line or '⚔️' in line and 'Gear' in line:
                 current_section = 'gear'
                 logger.info("📍 Найдена секция: Gear")
                 continue
@@ -355,45 +355,15 @@ class DiscordStockParser:
                 continue
             
             # Парсим предметы
-            # Формат: **4x** <:emoji:id> Cactus Seed
+            # Формат: 4x 🌵 Cactus Seed или 1x 🥕 Carrot Launcher
             if 'x' in line and any(char.isdigit() for char in line):
-                # Убираем Discord эмодзи (<:name:id>)
-                clean_line = re.sub(r'<:[^:]+:\d+>', '', line)
-                
-                # Убираем markdown форматирование
-                clean_line = clean_line.replace('**', '').replace('*', '').replace('__', '').replace('_', '')
-                
-                # Убираем Unicode эмодзи
+                # Убираем эмодзи для парсинга
+                clean_line = line
                 for emoji in ['🌵', '🍓', '🎃', '🌻', '🐉', '🍆', '🍉', '🍇', '🥥', '🪴', '🥕', '🍅', '🍄', '🥭', '🍋', '⭐', '🥬', '🪣', '❄️', '🍌', '🌬️', '💧', '🔥']:
                     clean_line = clean_line.replace(emoji, '')
                 
-                # Очищаем лишние пробелы
-                clean_line = ' '.join(clean_line.split())
-                
-                logger.debug(f"🔍 Очищенная строка: '{clean_line}'")
-                
                 # Ищем паттерн: цифра + x + название
                 match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?$', clean_line, re.IGNORECASE)
-                
-                if match:
-                    try:
-                        quantity = int(match.group(1))
-                        raw_name = match.group(2).strip()
-                        
-                        # Нормализуем название
-                        item_name = self.normalize_item_name(raw_name)
-                        
-                        if item_name and item_name in ITEMS_DATA:
-                            logger.info(f"✅ Найден предмет: {item_name} x{quantity}")
-                            result[current_section].append((item_name, quantity))
-                        else:
-                            logger.warning(f"⚠️ Неизвестный предмет: '{raw_name}' (из строки: '{line}')")
-                    except Exception as e:
-                        logger.error(f"❌ Ошибка парсинга строки '{line}': {e}")
-                else:
-                    logger.debug(f"⏭️ Не найден паттерн в: '{clean_line}'")
-        
-        return result
     
     def normalize_item_name(self, raw_name: str) -> Optional[str]:
         """Нормализует название предмета"""
@@ -420,7 +390,7 @@ class DiscordStockParser:
             'carnivorous plant': 'Carnivorous Plant',
             'carnivorous': 'Carnivorous Plant',
             'mr carrot': 'Mr Carrot',
-            'Mr Carrot': 'Mr Carrot',
+            'carrot': 'Mr Carrot',
             'tomatrio': 'Tomatrio',
             'tomato': 'Tomatrio',
             'shroombino': 'Shroombino',
@@ -455,25 +425,13 @@ class DiscordStockParser:
         
         message = "📊 *ТЕКУЩИЙ СТОК*\n\n"
         
-        # Семена
+        # Только семена
         seeds = stock_data.get('seeds', [])
         message += "🌱 *СЕМЕНА:*\n"
         if seeds:
             for item_name, quantity in seeds:
                 item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
-                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
-        else:
-            message += "_Пусто_\n"
-        
-        message += "\n"
-        
-        # Снаряжение
-        gear = stock_data.get('gear', [])
-        message += "⚔️ *СНАРЯЖЕНИЕ:*\n"
-        if gear:
-            for item_name, quantity in gear:
-                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
-                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
+                message += f"{item_info['emoji']} *{item_name}*: +{quantity} ({item_info['price']})\n"
         else:
             message += "_Пусто_\n"
         
@@ -643,31 +601,27 @@ class PVBDiscordClient(discord.Client):
             return
         
         # Игнорируем StickyBot
-        if 'StickyBot' in str(message.author.name) or 'Stickied Message' in message.content:
+        if 'StickyBot' in str(message.author.name):
             logger.debug("⏭️ Пропущен StickyBot")
             return
         
-        # Проверяем что это Stock Notifier
+        # Проверяем что это stock_guru
         content_lower = message.content.lower()
-        has_stock_content = ('stock' in content_lower or 
-                           'seeds' in content_lower or 
-                           'gear' in content_lower or
-                           len(message.embeds) > 0)
+        has_stock_content = ('restock' in content_lower or 'stock' in content_lower)
         
         if not has_stock_content:
-            logger.debug(f"⏭️ Неstock сообщение от {message.author.name}")
+            logger.debug(f"⏭️ Не restock сообщение от {message.author.name}")
             return
         
-        logger.info(f"📨 Новое сообщение от {message.author.name}")
+        logger.info(f"📨 Новое RESTOCK сообщение от {message.author.name}")
         
         try:
             # Парсим сообщение
             stock_data = parser.parse_stock_message(message.content, message.embeds)
             
-            if not stock_data['seeds'] and not stock_data['gear']:
+            if not stock_data['seeds']:
                 logger.warning("⚠️ Не удалось распарсить стоки")
-                logger.debug(f"Содержимое: {message.content[:200]}")
-                logger.debug(f"Embeds: {len(message.embeds)}")
+                logger.debug(f"Содержимое: {message.content[:500]}")
                 return
             
             # Обновляем кэш
@@ -675,7 +629,7 @@ class PVBDiscordClient(discord.Client):
             stock_cache = stock_data
             stock_cache_time = get_moscow_time()
             
-            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} гиров")
+            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян")
             
             # Отправляем автосток уведомления
             if parser.telegram_bot:
@@ -697,9 +651,9 @@ class PVBDiscordClient(discord.Client):
         
         try:
             async for msg in self.stock_channel.history(limit=10):
-                if msg.author.bot and ('Stock' in msg.content or msg.embeds):
+                if msg.author.bot and 'restock' in msg.content.lower():
                     stock_data = parser.parse_stock_message(msg.content, msg.embeds)
-                    if stock_data['seeds'] or stock_data['gear']:
+                    if stock_data['seeds']:
                         stock_cache = stock_data
                         stock_cache_time = now
                         return stock_data
@@ -798,7 +752,6 @@ async def autostock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("🌱 Семена", callback_data="as_seeds")],
-        [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
         [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
     ]
     
@@ -911,7 +864,6 @@ async def autostock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif data == "as_back":
             keyboard = [
                 [InlineKeyboardButton("🌱 Семена", callback_data="as_seeds")],
-                [InlineKeyboardButton("⚔️ Снаряжение", callback_data="as_gear")],
                 [InlineKeyboardButton("📋 Мои автостоки", callback_data="as_list")],
             ]
             message = "🔔 *УПРАВЛЕНИЕ АВТОСТОКАМИ*\n\nВыберите категорию."
