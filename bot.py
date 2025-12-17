@@ -320,7 +320,7 @@ class DiscordStockParser:
         self.telegram_bot: Optional[Bot] = None
     
     def parse_stock_message(self, content: str, embeds: List[discord.Embed]) -> Dict:
-        """Парсит сообщение от Stock Notifier бота - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+        """Парсит сообщения от Stock Notifier - ПРАВИЛЬНЫЙ ФОРМАТ"""
         result = {"seeds": [], "gear": []}
         
         # Собираем весь текст
@@ -333,81 +333,93 @@ class DiscordStockParser:
             for field in embed.fields:
                 full_text += f"{field.name}\n{field.value}\n"
         
-        logger.info(f"🔍 Парсинг полного текста ({len(full_text)} символов)")
+        logger.info(f"🔍 Парсинг текста ({len(full_text)} символов)")
         
         # Разбиваем на строки
         lines = full_text.split('\n')
         
-        for i, line in enumerate(lines):
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
             
-            # Ищем паттерн: "+X stock" на следующей строке после названия предмета
-            # Формат Discord:
-            # 🌻 Sunflower
-            # +2 stock (@Sunflower)
+            # ПРАВИЛЬНЫЙ ФОРМАТ: "🌻 Sunflower ; +2 stock (@Sunflower)"
+            # Ищем паттерн: эмодзи + название ; +X stock
+            match = re.search(r'([🌵🍓🎃🌻🐉🍆🍉🍇🥥🪴🥕🍅🍄🥭🍋⭐🥬🪣❄️🍌🌬️])\s*([^;+]+)\s*;\s*\+(\d+)\s+stock', line, re.IGNORECASE)
             
-            # Проверяем есть ли в строке "+X stock"
-            stock_match = re.search(r'\+(\d+)\s+stock', line, re.IGNORECASE)
-            
-            if stock_match:
-                quantity = int(stock_match.group(1))
+            if match:
+                emoji = match.group(1)
+                raw_name = match.group(2).strip()
+                quantity = int(match.group(3))
                 
-                # Ищем название предмета в предыдущей строке
-                if i > 0:
-                    prev_line = lines[i - 1].strip()
-                    # Убираем эмодзи из названия
-                    item_text = re.sub(r'[🌵🍓🎃🌻🐉🍆🍉🍇🥥🪴🥕🍅🍄🥭🍋⭐🥬🪣❄️🍌🌬️]', '', prev_line).strip()
-                    
-                    # Нормализуем название
-                    item_name = self.normalize_item_name(item_text)
-                    
-                    if item_name:
-                        category = ITEMS_DATA[item_name]['category']
-                        result[f"{category}s"].append((item_name, quantity))
-                        logger.info(f"✅ Найден: {item_name} x{quantity} ({category})")
-                    else:
-                        logger.warning(f"⚠️ Не распознан предмет: '{item_text}' из строки: '{prev_line}'")
+                # Нормализуем название
+                item_name = self.normalize_item_name(raw_name)
+                
+                if item_name:
+                    category = ITEMS_DATA[item_name]['category']
+                    result[f"{category}s"].append((item_name, quantity))
+                    logger.info(f"✅ Найден: {item_name} x{quantity} ({category})")
+                else:
+                    logger.warning(f"⚠️ Не распознан предмет: '{raw_name}' из строки: '{line}'")
         
-        logger.info(f"📊 Результат парсинга: {len(result['seeds'])} семян, {len(result['gear'])} снаряжения")
+        logger.info(f"📊 Результат: {len(result['seeds'])} семян, {len(result['gear'])} снаряжения")
         return result
     
     def normalize_item_name(self, raw_name: str) -> Optional[str]:
         """Нормализует название предмета"""
         raw_name = raw_name.strip().lower()
         
-        # Убираем лишние слова
-        raw_name = raw_name.replace(' seed', '').replace(' gun', '').replace(' launcher', '')
-        raw_name = raw_name.replace(' grenade', '').replace(' bucket', '').replace(' blower', '')
+        # Убираем лишние слова и символы
+        raw_name = re.sub(r'\s*(seed|gun|launcher|grenade|bucket|blower)\s*', '', raw_name, flags=re.IGNORECASE)
         raw_name = raw_name.strip()
         
-        # Прямое сопоставление с названиями из ITEMS_DATA
+        # Прямое сопоставление
         for item_name in ITEMS_DATA.keys():
             if item_name.lower() == raw_name:
                 return item_name
         
-        # Маппинг для вариаций
+        # Маппинг вариаций
         name_map = {
             'dragon': 'Dragon Fruit',
+            'dragon fruit': 'Dragon Fruit',
             'coco': 'Cocotank',
+            'cocotank': 'Cocotank',
             'carnivorous': 'Carnivorous Plant',
+            'carnivorous plant': 'Carnivorous Plant',
             'mr carrot': 'Mr Carrot',
             'carrot': 'Mr Carrot',
+            'tomatrio': 'Tomatrio',
             'tomato': 'Tomatrio',
+            'shroombino': 'Shroombino',
             'mushroom': 'Shroombino',
+            'mango': 'Mango',
             'limone': 'King Limone',
+            'king limone': 'King Limone',
             'king lemon': 'King Limone',
+            'lemon': 'King Limone',
+            'starfruit': 'Starfruit',
             'star': 'Starfruit',
+            'brussel sprouts': 'Brussel Sprouts',
             'brussel': 'Brussel Sprouts',
             'sprouts': 'Brussel Sprouts',
             'water': 'Water Bucket',
+            'water bucket': 'Water Bucket',
             'bucket': 'Water Bucket',
             'frost': 'Frost Grenade',
-            'grenade': 'Frost Grenade',
+            'frost grenade': 'Frost Grenade',
             'banana': 'Banana Gun',
+            'banana gun': 'Banana Gun',
+            'frost blower': 'Frost Blower',
             'blower': 'Frost Blower',
-            'launcher': 'Carrot Launcher'
+            'carrot launcher': 'Carrot Launcher',
+            'launcher': 'Carrot Launcher',
+            'sunflower': 'Sunflower',
+            'pumpkin': 'Pumpkin',
+            'strawberry': 'Strawberry',
+            'cactus': 'Cactus',
+            'eggplant': 'Eggplant',
+            'watermelon': 'Watermelon',
+            'grape': 'Grape'
         }
         
         return name_map.get(raw_name)
@@ -427,6 +439,14 @@ class DiscordStockParser:
                 message += f"{item_info['emoji']} *{item_name}*: +{quantity} ({item_info['price']})\n"
         else:
             message += "_Пусто_\n"
+        
+        # Снаряжение
+        gear = stock_data.get('gear', [])
+        if gear:
+            message += "\n⚔️ *СНАРЯЖЕНИЕ:*\n"
+            for item_name, quantity in gear:
+                item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+                message += f"{item_info['emoji']} *{item_name}*: +{quantity} ({item_info['price']})\n"
         
         current_time = get_moscow_time().strftime("%H:%M:%S")
         message += f"\n🕒 _Обновлено: {current_time} МСК_"
@@ -926,7 +946,7 @@ def ping():
         "status": "ok",
         "time": datetime.utcnow().isoformat() + "Z",
         "moscow_time": get_moscow_time().strftime("%H:%M:%S"),
-        "bot": "PVB Stock Tracker v3.1",
+        "bot": "PVB Stock Tracker v3.2 FIXED",
         "discord": discord_client.is_ready() if discord_client else False,
         "cache_size": len(user_autostocks_cache)
     }), 200
@@ -946,7 +966,7 @@ async def post_init(application: Application):
 # ========== MAIN ==========
 def main():
     logger.info("="*60)
-    logger.info("🌱 PVB Stock Tracker Bot v3.1 - FIXED PARSER")
+    logger.info("🌱 PVB Stock Tracker Bot v3.2 - FIXED PARSER")
     logger.info("="*60)
     
     build_item_id_mappings()
