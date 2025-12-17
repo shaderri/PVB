@@ -667,14 +667,29 @@ class PVBDiscordClient(discord.Client):
         
         try:
             logger.info("🔍 Поиск последнего stock сообщения в истории...")
+            msg_count = 0
             async for msg in self.stock_channel.history(limit=20):
+                msg_count += 1
+                logger.info(f"📨 Сообщение #{msg_count}:")
+                logger.info(f"  Автор: {msg.author.name} (Bot: {msg.author.bot})")
+                logger.info(f"  Содержимое (первые 200 символов): {msg.content[:200]}")
+                logger.info(f"  Embeds: {len(msg.embeds)}")
+                
                 if msg.author.bot:
                     if 'StickyBot' in str(msg.author.name):
+                        logger.debug(f"  ⏭️ Пропущен StickyBot")
                         continue
                     
                     content_lower = msg.content.lower()
-                    if 'restock' in content_lower or 'stock' in content_lower:
+                    has_restock = 'restock' in content_lower
+                    has_stock = 'stock' in content_lower
+                    
+                    logger.info(f"  Проверка: restock={has_restock}, stock={has_stock}")
+                    
+                    if has_restock or has_stock:
                         logger.info(f"✅ Найдено stock сообщение от {msg.author.name}")
+                        logger.info(f"📄 ПОЛНОЕ СОДЕРЖИМОЕ:\n{msg.content}\n")
+                        
                         stock_data = parser.parse_stock_message(msg.content, msg.embeds)
                         
                         if stock_data['seeds'] or stock_data['gear']:
@@ -682,8 +697,10 @@ class PVBDiscordClient(discord.Client):
                             stock_cache_time = now
                             logger.info(f"📦 Загружено: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
                             return stock_data
+                        else:
+                            logger.warning("⚠️ Парсинг не дал результатов")
             
-            logger.warning("⚠️ Stock сообщения не найдены в истории")
+            logger.warning(f"⚠️ Stock сообщения не найдены среди {msg_count} сообщений")
             return {"seeds": [], "gear": []}
         except Exception as e:
             logger.error(f"❌ fetch_latest_stock: {e}", exc_info=True)
