@@ -668,28 +668,43 @@ class PVBDiscordClient(discord.Client):
         try:
             logger.info("🔍 Поиск последнего stock сообщения в истории...")
             msg_count = 0
-            async for msg in self.stock_channel.history(limit=20):
+            async for msg in self.stock_channel.history(limit=5):
                 msg_count += 1
                 logger.info(f"📨 Сообщение #{msg_count}:")
                 logger.info(f"  Автор: {msg.author.name} (Bot: {msg.author.bot})")
-                logger.info(f"  Содержимое (первые 200 символов): {msg.content[:200]}")
+                logger.info(f"  Содержимое: {msg.content[:100]}")
                 logger.info(f"  Embeds: {len(msg.embeds)}")
                 
-                if msg.author.bot:
-                    if 'StickyBot' in str(msg.author.name):
-                        logger.debug(f"  ⏭️ Пропущен StickyBot")
-                        continue
+                # ЛОГИРУЕМ EMBEDS
+                if msg.embeds:
+                    for idx, embed in enumerate(msg.embeds):
+                        logger.info(f"  📋 Embed #{idx+1}:")
+                        if embed.title:
+                            logger.info(f"    Title: {embed.title}")
+                        if embed.description:
+                            logger.info(f"    Description: {embed.description[:300]}")
+                        if embed.fields:
+                            logger.info(f"    Fields: {len(embed.fields)}")
+                            for field in embed.fields:
+                                logger.info(f"      - {field.name}: {field.value[:100]}")
+                
+                if msg.author.bot and 'StickyBot' not in str(msg.author.name):
+                    # Проверяем и content, и embeds
+                    full_text = msg.content
+                    for embed in msg.embeds:
+                        if embed.title:
+                            full_text += " " + embed.title
+                        if embed.description:
+                            full_text += " " + embed.description
                     
-                    content_lower = msg.content.lower()
-                    has_restock = 'restock' in content_lower
-                    has_stock = 'stock' in content_lower
+                    full_text_lower = full_text.lower()
+                    has_restock = 'restock' in full_text_lower
+                    has_stock = 'stock' in full_text_lower
                     
                     logger.info(f"  Проверка: restock={has_restock}, stock={has_stock}")
                     
-                    if has_restock or has_stock:
-                        logger.info(f"✅ Найдено stock сообщение от {msg.author.name}")
-                        logger.info(f"📄 ПОЛНОЕ СОДЕРЖИМОЕ:\n{msg.content}\n")
-                        
+                    if has_restock or has_stock or msg.embeds:
+                        logger.info(f"✅ Пробуем распарсить сообщение от {msg.author.name}")
                         stock_data = parser.parse_stock_message(msg.content, msg.embeds)
                         
                         if stock_data['seeds'] or stock_data['gear']:
