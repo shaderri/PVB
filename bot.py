@@ -320,47 +320,46 @@ class DiscordStockParser:
         self.telegram_bot: Optional[Bot] = None
     
     def parse_stock_message(self, content: str, embeds: List[discord.Embed]) -> Dict:
-        """Парсит сообщения от Stock Notifier - ПРАВИЛЬНЫЙ ФОРМАТ"""
+        """Парсит сообщения от Stock Notifier через embed fields"""
         result = {"seeds": [], "gear": []}
         
-        # Собираем весь текст
-        full_text = content + "\n"
+        if not embeds:
+            logger.warning("⚠️ Нет embeds для парсинга")
+            return result
+        
+        logger.info(f"🔍 Парсинг {len(embeds)} embeds")
+        
         for embed in embeds:
-            if embed.title:
-                full_text += embed.title + "\n"
-            if embed.description:
-                full_text += embed.description + "\n"
-            for field in embed.fields:
-                full_text += f"{field.name}\n{field.value}\n"
-        
-        logger.info(f"🔍 Парсинг текста ({len(full_text)} символов)")
-        
-        # Разбиваем на строки
-        lines = full_text.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
+            if not embed.fields:
                 continue
             
-            # ПРАВИЛЬНЫЙ ФОРМАТ: "🌻 Sunflower ; +2 stock (@Sunflower)"
-            # Ищем паттерн: эмодзи + название ; +X stock
-            match = re.search(r'([🌵🍓🎃🌻🐉🍆🍉🍇🥥🪴🥕🍅🍄🥭🍋⭐🥬🪣❄️🍌🌬️])\s*([^;+]+)\s*;\s*\+(\d+)\s+stock', line, re.IGNORECASE)
+            logger.info(f"📋 Обработка embed с {len(embed.fields)} полями")
             
-            if match:
-                emoji = match.group(1)
-                raw_name = match.group(2).strip()
-                quantity = int(match.group(3))
+            for field in embed.fields:
+                # field.name = "<:Sunflower:1426493232933634080> Sunflower"
+                # field.value = "+2 stock (<@&1408040455949647943>)"
+                
+                # Извлекаем название предмета из field.name
+                # Убираем кастомные эмодзи формата <:Name:ID>
+                name_clean = re.sub(r'<:[^:]+:\d+>\s*', '', field.name).strip()
+                
+                # Извлекаем количество из field.value
+                value_match = re.search(r'\+(\d+)\s+stock', field.value, re.IGNORECASE)
+                
+                if not value_match:
+                    continue
+                
+                quantity = int(value_match.group(1))
                 
                 # Нормализуем название
-                item_name = self.normalize_item_name(raw_name)
+                item_name = self.normalize_item_name(name_clean)
                 
                 if item_name:
                     category = ITEMS_DATA[item_name]['category']
                     result[f"{category}s"].append((item_name, quantity))
                     logger.info(f"✅ Найден: {item_name} x{quantity} ({category})")
                 else:
-                    logger.warning(f"⚠️ Не распознан предмет: '{raw_name}' из строки: '{line}'")
+                    logger.warning(f"⚠️ Не распознан предмет: '{name_clean}' из field.name: '{field.name}'")
         
         logger.info(f"📊 Результат: {len(result['seeds'])} семян, {len(result['gear'])} снаряжения")
         return result
