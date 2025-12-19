@@ -680,12 +680,12 @@ class PVBDiscordClient(discord.Client):
             logger.info(f"✅ Стоки обновлены в кэше: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
             logger.info(f"📦 Детали стоков: {stock_data}")
             
-            # ВАЖНО: Отправляем автосток уведомления СРАЗУ
-            if parser.telegram_bot:
+            # Получаем telegram bot из глобальной переменной telegram_app
+            if telegram_app and telegram_app.bot:
                 logger.info("🚀 Запуск отправки уведомлений...")
-                await parser.check_user_autostocks(stock_data, parser.telegram_bot)
+                await parser.check_user_autostocks(stock_data, telegram_app.bot)
             else:
-                logger.error("❌ Telegram bot не инициализирован!")
+                logger.error("❌ Telegram app не инициализирован!")
         except Exception as e:
             logger.error(f"❌ Ошибка обработки сообщения: {e}", exc_info=True)
     
@@ -1004,7 +1004,9 @@ def health():
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 async def post_init(application: Application):
     parser.telegram_bot = application.bot
-    logger.info("✅ Telegram bot инициализирован")
+    logger.info("✅ Telegram bot установлен в parser")
+    logger.info(f"✅ Bot ID: {application.bot.id}")
+    logger.info(f"✅ Bot username: @{application.bot.username}")
 
 # ========== MAIN ==========
 def main():
@@ -1039,21 +1041,32 @@ def main():
     telegram_app.post_shutdown = shutdown_callback
     
     async def run_both():
+        # Запускаем Discord в фоне
         discord_task = asyncio.create_task(discord_client.start(DISCORD_TOKEN))
         
+        # Ждем подключения Discord
         while not discord_client.is_ready():
             await asyncio.sleep(0.5)
         
         logger.info("✅ Discord клиент готов к работе")
         
+        # Теперь инициализируем и запускаем Telegram
         await telegram_app.initialize()
-        await telegram_app.start()
-        await telegram_app.updater.start_polling(allowed_updates=None, drop_pending_updates=True)
+        logger.info("✅ Telegram app инициализирован")
         
+        await telegram_app.start()
+        logger.info("✅ Telegram app запущен")
+        
+        await telegram_app.updater.start_polling(allowed_updates=None, drop_pending_updates=True)
+        logger.info("✅ Telegram polling запущен")
+        
+        logger.info("="*60)
         logger.info("🚀 БОТ УСПЕШНО ЗАПУЩЕН!")
         logger.info(f"👤 Admin ID: {ADMIN_ID}")
         logger.info(f"📢 Обязательные каналы: {', '.join(REQUIRED_CHANNELS)}")
         logger.info(f"📡 Discord канал стоков: {DISCORD_STOCK_CHANNEL_ID}")
+        logger.info(f"🤖 Telegram bot: @{telegram_app.bot.username}")
+        logger.info(f"🔗 Telegram bot установлен в parser: {parser.telegram_bot is not None}")
         logger.info("="*60)
         
         try:
