@@ -518,7 +518,10 @@ class DiscordStockParser:
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
         """Проверяет автостоки и отправляет уведомления пользователям"""
         if not stock_data:
+            logger.warning("❌ stock_data пустой")
             return
+        
+        logger.info(f"🔍 Начало проверки автостоков. Данные: {stock_data}")
         
         current_stock = {}
         for stock_type in ['seeds', 'gear']:
@@ -527,13 +530,15 @@ class DiscordStockParser:
                     current_stock[item_name] = quantity
         
         if not current_stock:
-            logger.info("📭 Нет предметов в стоке для уведомлений")
+            logger.warning("📭 Нет предметов в стоке для уведомлений")
             return
         
-        logger.info(f"📦 Предметы в стоке: {list(current_stock.keys())}")
+        logger.info(f"📦 Предметы в текущем стоке: {current_stock}")
         
         # Параллельная загрузка пользователей для всех предметов
         item_names = list(current_stock.keys())
+        logger.info(f"🔎 Загружаем пользователей для предметов: {item_names}")
+        
         user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
         users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
         
@@ -544,24 +549,32 @@ class DiscordStockParser:
                 continue
             if result:
                 item_users_map[item_name] = result
-                logger.info(f"👥 {item_name}: {len(result)} пользователей отслеживают")
+                logger.info(f"👥 {item_name}: {len(result)} пользователей отслеживают → {result}")
+            else:
+                logger.info(f"📭 {item_name}: нет пользователей")
         
         if not item_users_map:
-            logger.info("📭 Нет пользователей для уведомлений")
+            logger.warning("📭 Нет пользователей для уведомлений")
             return
         
         # Отправка уведомлений по каждому предмету
         for item_name, count in current_stock.items():
+            logger.info(f"🔔 Обработка предмета: {item_name} (x{count})")
+            
             # Проверяем глобальный кулдаун для предмета
             if not self.should_notify_item(item_name):
-                logger.debug(f"⏸️ {item_name}: глобальный кулдаун активен")
+                last_time = item_last_seen.get(item_name)
+                if last_time:
+                    elapsed = (get_moscow_time() - last_time).total_seconds()
+                    logger.warning(f"⏸️ {item_name}: глобальный кулдаун активен (прошло {elapsed:.0f}s из 90s)")
                 continue
             
             users = item_users_map.get(item_name, [])
             if not users:
+                logger.info(f"📭 {item_name}: нет пользователей для уведомления")
                 continue
             
-            logger.info(f"🔔 Отправка уведомлений для {item_name} → {len(users)} пользователям")
+            logger.info(f"🚀 Отправка уведомлений для {item_name} → {len(users)} пользователям: {users}")
             item_last_seen[item_name] = get_moscow_time()
             
             sent = 0
@@ -577,27 +590,38 @@ class DiscordStockParser:
                 for user_id in batch:
                     # Проверяем персональный кулдаун пользователя
                     if not self.can_send_to_user(user_id, item_name):
+                        last_notif = user_sent_notifications.get(user_id, {}).get(item_name)
+                        if last_notif:
+                            elapsed = (get_moscow_time() - last_notif).total_seconds()
+                            logger.debug(f"⏸️ {item_name} → user {user_id}: персональный кулдаун (прошло {elapsed:.0f}s из 120s)")
                         skipped += 1
                         continue
+                    
+                    logger.info(f"✉️ Отправка {item_name} → user {user_id}")
                     send_tasks.append(self.send_autostock_notification(bot, user_id, item_name, count))
                 
                 if send_tasks:
                     results = await asyncio.gather(*send_tasks, return_exceptions=True)
-                    for result in results:
+                    for idx, result in enumerate(results):
                         if result is True:
                             sent += 1
+                            logger.info(f"✅ Успешно отправлено user {batch[idx]}")
                         elif isinstance(result, Exception):
                             errors += 1
-                            logger.error(f"❌ Исключение при отправке: {result}")
+                            logger.error(f"❌ Ошибка отправки user {batch[idx]}: {result}")
+                        else:
+                            logger.warning(f"⚠️ Неожиданный результат для user {batch[idx]}: {result}")
                     
                     # Небольшая задержка между пакетами
                     if i + batch_size < len(users):
                         await asyncio.sleep(0.1)
             
-            logger.info(f"✅ {item_name}: отправлено {sent}, пропущено {skipped}, ошибок {errors}")
+            logger.info(f"📊 {item_name} итоги: ✅ отправлено {sent}, ⏸️ пропущено {skipped}, ❌ ошибок {errors}")
             
             # Задержка между разными предметами
             await asyncio.sleep(0.05)
+        
+        logger.info("✅ Проверка автостоков завершена")
 
 parser = DiscordStockParser()
 
@@ -638,6 +662,7 @@ class PVBDiscordClient(discord.Client):
         
         logger.info(f"📨 ===== НОВОЕ RESTOCK СООБЩЕНИЕ =====")
         logger.info(f"От: {message.author.name}")
+        logger.info(f"Время: {get_moscow_time().strftime('%H:%M:%S')}")
         
         try:
             # Парсим сообщение
@@ -652,11 +677,15 @@ class PVBDiscordClient(discord.Client):
             stock_cache = stock_data
             stock_cache_time = get_moscow_time()
             
-            logger.info(f"✅ Стоки обновлены: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
+            logger.info(f"✅ Стоки обновлены в кэше: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
+            logger.info(f"📦 Детали стоков: {stock_data}")
             
-            # Отправляем автосток уведомления
+            # ВАЖНО: Отправляем автосток уведомления СРАЗУ
             if parser.telegram_bot:
-                asyncio.create_task(parser.check_user_autostocks(stock_data, parser.telegram_bot))
+                logger.info("🚀 Запуск отправки уведомлений...")
+                await parser.check_user_autostocks(stock_data, parser.telegram_bot)
+            else:
+                logger.error("❌ Telegram bot не инициализирован!")
         except Exception as e:
             logger.error(f"❌ Ошибка обработки сообщения: {e}", exc_info=True)
     
