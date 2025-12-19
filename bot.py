@@ -33,10 +33,10 @@ USERS_URL = f"{SUPABASE_URL}/rest/v1/bot_users"
 # Discord канал стоков
 DISCORD_STOCK_CHANNEL_ID = 1407975317682917457
 
-STOCK_CACHE_SECONDS = 20
-USER_NOTIFICATION_COOLDOWN = 180
-AUTOSTOCK_CACHE_TTL = 180
-SUBSCRIPTION_CACHE_TTL = 300
+STOCK_CACHE_SECONDS = 15
+USER_NOTIFICATION_COOLDOWN = 120
+AUTOSTOCK_CACHE_TTL = 120
+SUBSCRIPTION_CACHE_TTL = 180
 
 if not BOT_TOKEN or not DISCORD_TOKEN:
     raise ValueError("BOT_TOKEN и DISCORD_TOKEN обязательны!")
@@ -435,7 +435,7 @@ class DiscordStockParser:
         if seeds:
             for item_name, quantity in seeds:
                 item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
-                message += f"{item_info['emoji']} *{item_name}*: +{quantity} ({item_info['price']})\n"
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
         else:
             message += "_Пусто_\n"
         
@@ -445,18 +445,19 @@ class DiscordStockParser:
             message += "\n⚔️ *СНАРЯЖЕНИЕ:*\n"
             for item_name, quantity in gear:
                 item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
-                message += f"{item_info['emoji']} *{item_name}*: +{quantity} ({item_info['price']})\n"
+                message += f"{item_info['emoji']} *{item_name}*: x{quantity} ({item_info['price']})\n"
         
         current_time = get_moscow_time().strftime("%H:%M:%S")
         message += f"\n🕒 _Обновлено: {current_time} МСК_"
         return message
     
     def should_notify_item(self, item_name: str) -> bool:
+        """Проверяет, можно ли отправлять уведомления для предмета (глобальный кулдаун)"""
         if item_name not in item_last_seen:
             return True
         now = get_moscow_time()
         last_time = item_last_seen[item_name]
-        return (now - last_time).total_seconds() >= 120
+        return (now - last_time).total_seconds() >= 90
     
     def can_send_to_user(self, user_id: int, item_name: str) -> bool:
         if user_id not in user_sent_notifications:
@@ -489,15 +490,15 @@ class DiscordStockParser:
             return True
         except TelegramError as e:
             error_msg = str(e).lower()
-            if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg:
-                logger.debug(f"🚫 {user_id} заблокировал бота")
+            if "forbidden" in error_msg or "blocked" in error_msg or "bot was blocked" in error_msg or "user is deactivated" in error_msg:
+                logger.info(f"🚫 Пользователь {user_id} заблокировал бота или удалил аккаунт")
                 asyncio.create_task(self.cleanup_blocked_user(user_id))
                 return False
             else:
-                logger.debug(f"⚠️ Ошибка отправки {user_id}: {e}")
+                logger.warning(f"⚠️ Ошибка отправки {user_id}: {e}")
             return False
         except Exception as e:
-            logger.error(f"❌ Ошибка {user_id}: {e}")
+            logger.error(f"❌ Неожиданная ошибка при отправке {user_id}: {e}")
             return False
     
     async def cleanup_blocked_user(self, user_id: int):
@@ -515,6 +516,7 @@ class DiscordStockParser:
             logger.error(f"❌ Очистка {user_id}: {e}")
     
     async def check_user_autostocks(self, stock_data: Dict, bot: Bot):
+        """Проверяет автостоки и отправляет уведомления пользователям"""
         if not stock_data:
             return
         
@@ -525,12 +527,12 @@ class DiscordStockParser:
                     current_stock[item_name] = quantity
         
         if not current_stock:
-            logger.info("📭 Нет предметов в стоке")
+            logger.info("📭 Нет предметов в стоке для уведомлений")
             return
         
         logger.info(f"📦 Предметы в стоке: {list(current_stock.keys())}")
         
-        # Параллельная загрузка пользователей
+        # Параллельная загрузка пользователей для всех предметов
         item_names = list(current_stock.keys())
         user_tasks = [self.db.get_users_tracking_item(item_name) for item_name in item_names]
         users_results = await asyncio.gather(*user_tasks, return_exceptions=True)
@@ -538,36 +540,42 @@ class DiscordStockParser:
         item_users_map = {}
         for item_name, result in zip(item_names, users_results):
             if isinstance(result, Exception):
-                logger.error(f"❌ {item_name}: {result}")
+                logger.error(f"❌ Ошибка загрузки пользователей для {item_name}: {result}")
                 continue
             if result:
                 item_users_map[item_name] = result
-                logger.info(f"👥 {item_name}: {len(result)} пользователей")
+                logger.info(f"👥 {item_name}: {len(result)} пользователей отслеживают")
         
-        # Отправка уведомлений
+        if not item_users_map:
+            logger.info("📭 Нет пользователей для уведомлений")
+            return
+        
+        # Отправка уведомлений по каждому предмету
         for item_name, count in current_stock.items():
+            # Проверяем глобальный кулдаун для предмета
             if not self.should_notify_item(item_name):
-                logger.debug(f"⏸️ {item_name}: кулдаун")
+                logger.debug(f"⏸️ {item_name}: глобальный кулдаун активен")
                 continue
             
             users = item_users_map.get(item_name, [])
             if not users:
                 continue
             
-            logger.info(f"🔔 {item_name}: отправка {len(users)} пользователям")
+            logger.info(f"🔔 Отправка уведомлений для {item_name} → {len(users)} пользователям")
             item_last_seen[item_name] = get_moscow_time()
             
             sent = 0
             skipped = 0
             errors = 0
             
-            # Отправка пакетами
-            batch_size = 30
+            # Отправка небольшими пакетами для избежания rate limits
+            batch_size = 25
             for i in range(0, len(users), batch_size):
                 batch = users[i:i + batch_size]
                 send_tasks = []
                 
                 for user_id in batch:
+                    # Проверяем персональный кулдаун пользователя
                     if not self.can_send_to_user(user_id, item_name):
                         skipped += 1
                         continue
@@ -580,12 +588,16 @@ class DiscordStockParser:
                             sent += 1
                         elif isinstance(result, Exception):
                             errors += 1
+                            logger.error(f"❌ Исключение при отправке: {result}")
                     
+                    # Небольшая задержка между пакетами
                     if i + batch_size < len(users):
-                        await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.1)
             
             logger.info(f"✅ {item_name}: отправлено {sent}, пропущено {skipped}, ошибок {errors}")
-            await asyncio.sleep(0.02)
+            
+            # Задержка между разными предметами
+            await asyncio.sleep(0.05)
 
 parser = DiscordStockParser()
 
@@ -613,20 +625,19 @@ class PVBDiscordClient(discord.Client):
         
         # Игнорируем StickyBot
         if 'StickyBot' in str(message.author.name):
-            logger.debug("⏭️ Пропущен StickyBot")
             return
         
-        # Проверяем что это stock сообщение
-        content_lower = message.content.lower()
-        has_stock_content = ('restock' in content_lower or 'stock' in content_lower)
+        # Проверяем embeds (там находятся данные)
+        if not message.embeds:
+            return
         
-        if not has_stock_content:
-            logger.debug(f"⏭️ Не stock сообщение от {message.author.name}")
+        # Проверяем title embed на наличие "restock"
+        has_restock = any('restock' in (embed.title or '').lower() for embed in message.embeds)
+        if not has_restock:
             return
         
         logger.info(f"📨 ===== НОВОЕ RESTOCK СООБЩЕНИЕ =====")
         logger.info(f"От: {message.author.name}")
-        logger.info(f"Содержимое: {message.content[:200]}")
         
         try:
             # Парсим сообщение
@@ -634,7 +645,6 @@ class PVBDiscordClient(discord.Client):
             
             if not stock_data['seeds'] and not stock_data['gear']:
                 logger.warning("⚠️ Не удалось распарсить стоки")
-                logger.debug(f"Полное содержимое:\n{message.content}")
                 return
             
             # Обновляем кэш
@@ -646,7 +656,7 @@ class PVBDiscordClient(discord.Client):
             
             # Отправляем автосток уведомления
             if parser.telegram_bot:
-                await parser.check_user_autostocks(stock_data, parser.telegram_bot)
+                asyncio.create_task(parser.check_user_autostocks(stock_data, parser.telegram_bot))
         except Exception as e:
             logger.error(f"❌ Ошибка обработки сообщения: {e}", exc_info=True)
     
@@ -666,55 +676,28 @@ class PVBDiscordClient(discord.Client):
         
         try:
             logger.info("🔍 Поиск последнего stock сообщения в истории...")
-            msg_count = 0
-            async for msg in self.stock_channel.history(limit=5):
-                msg_count += 1
-                logger.info(f"📨 Сообщение #{msg_count}:")
-                logger.info(f"  Автор: {msg.author.name} (Bot: {msg.author.bot})")
-                logger.info(f"  Содержимое: {msg.content[:100]}")
-                logger.info(f"  Embeds: {len(msg.embeds)}")
-                
-                # ЛОГИРУЕМ EMBEDS
-                if msg.embeds:
-                    for idx, embed in enumerate(msg.embeds):
-                        logger.info(f"  📋 Embed #{idx+1}:")
-                        if embed.title:
-                            logger.info(f"    Title: {embed.title}")
-                        if embed.description:
-                            logger.info(f"    Description: {embed.description[:300]}")
-                        if embed.fields:
-                            logger.info(f"    Fields: {len(embed.fields)}")
-                            for field in embed.fields:
-                                logger.info(f"      - {field.name}: {field.value[:100]}")
-                
-                if msg.author.bot and 'StickyBot' not in str(msg.author.name):
-                    # Проверяем и content, и embeds
-                    full_text = msg.content
-                    for embed in msg.embeds:
-                        if embed.title:
-                            full_text += " " + embed.title
-                        if embed.description:
-                            full_text += " " + embed.description
-                    
-                    full_text_lower = full_text.lower()
-                    has_restock = 'restock' in full_text_lower
-                    has_stock = 'stock' in full_text_lower
-                    
-                    logger.info(f"  Проверка: restock={has_restock}, stock={has_stock}")
-                    
-                    if has_restock or has_stock or msg.embeds:
-                        logger.info(f"✅ Пробуем распарсить сообщение от {msg.author.name}")
-                        stock_data = parser.parse_stock_message(msg.content, msg.embeds)
-                        
-                        if stock_data['seeds'] or stock_data['gear']:
-                            stock_cache = stock_data
-                            stock_cache_time = now
-                            logger.info(f"📦 Загружено: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
-                            return stock_data
-                        else:
-                            logger.warning("⚠️ Парсинг не дал результатов")
             
-            logger.warning(f"⚠️ Stock сообщения не найдены среди {msg_count} сообщений")
+            async for msg in self.stock_channel.history(limit=10):
+                if not msg.author.bot or 'StickyBot' in str(msg.author.name):
+                    continue
+                
+                if not msg.embeds:
+                    continue
+                
+                # Проверяем title embed на "restock"
+                has_restock = any('restock' in (embed.title or '').lower() for embed in msg.embeds)
+                
+                if has_restock:
+                    logger.info(f"✅ Найдено stock сообщение от {msg.author.name}")
+                    stock_data = parser.parse_stock_message(msg.content, msg.embeds)
+                    
+                    if stock_data['seeds'] or stock_data['gear']:
+                        stock_cache = stock_data
+                        stock_cache_time = now
+                        logger.info(f"📦 Загружено: {len(stock_data['seeds'])} семян, {len(stock_data['gear'])} снаряжения")
+                        return stock_data
+            
+            logger.warning("⚠️ Stock сообщения не найдены в истории")
             return {"seeds": [], "gear": []}
         except Exception as e:
             logger.error(f"❌ fetch_latest_stock: {e}", exc_info=True)
