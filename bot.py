@@ -76,7 +76,10 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-NOTIFICATION_ITEMS = ["Tomatrio", "Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
+NOTIFICATION_ITEMS = ["Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
+
+# ID канала для публичных уведомлений о редких предметах
+NOTIFICATION_CHANNEL_ID = os.getenv("NOTIFICATION_CHANNEL_ID")  # Добавь в .env
 
 SEED_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'seed']
 GEAR_ITEMS_LIST = [(name, info) for name, info in ITEMS_DATA.items() if info['category'] == 'gear']
@@ -451,7 +454,50 @@ class DiscordStockParser:
         message += f"\n🕒 _Обновлено: {current_time} МСК_"
         return message
     
-    def should_notify_item(self, item_name: str) -> bool:
+    async def send_channel_notification(self, bot: Bot, item_name: str, count: int) -> bool:
+        """Отправляет уведомление о редком предмете в публичный канал"""
+        if not NOTIFICATION_CHANNEL_ID:
+            logger.warning("⚠️ NOTIFICATION_CHANNEL_ID не установлен в .env")
+            return False
+        
+        try:
+            item_info = ITEMS_DATA.get(item_name, {"emoji": "📦", "price": "?"})
+            current_time = get_moscow_time().strftime("%H:%M:%S")
+            
+            # Определяем уровень редкости
+            rarity_emoji = "💎"
+            if item_name == "Brussel Sprouts":
+                rarity_emoji = "👑"
+            elif item_name in ["Starfruit", "King Limone"]:
+                rarity_emoji = "🌟"
+            elif item_name == "Mango":
+                rarity_emoji = "💎"
+            elif item_name == "Shroombino":
+                rarity_emoji = "💜"
+            
+            message = (
+                f"{rarity_emoji} *РЕДКИЙ СТОК!* {rarity_emoji}\n\n"
+                f"{item_info['emoji']} *{item_name}*\n"
+                f"📦 Количество: *x{count}*\n"
+                f"💰 Цена: {item_info['price']}\n"
+                f"🕒 {current_time} МСК\n\n"
+                f"⚡️ _Успей купить!_"
+            )
+            
+            await bot.send_message(
+                chat_id=NOTIFICATION_CHANNEL_ID, 
+                text=message, 
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            logger.info(f"✅ Уведомление о {item_name} отправлено в канал {NOTIFICATION_CHANNEL_ID}")
+            return True
+        except TelegramError as e:
+            logger.error(f"❌ Ошибка отправки в канал: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при отправке в канал: {e}")
+            return False
         """Проверяет, можно ли отправлять уведомления для предмета (глобальный кулдаун)"""
         if item_name not in item_last_seen:
             return True
@@ -534,6 +580,15 @@ class DiscordStockParser:
             return
         
         logger.info(f"📦 Предметы в текущем стоке: {current_stock}")
+        
+        # Отправляем уведомления в канал для редких предметов
+        for item_name, count in current_stock.items():
+            if item_name in NOTIFICATION_ITEMS:
+                # Проверяем, отправляли ли уже уведомление в канал для этого предмета
+                if self.should_notify_item(f"channel_{item_name}"):
+                    logger.info(f"📢 Отправка уведомления в канал для {item_name}")
+                    await self.send_channel_notification(bot, item_name, count)
+                    item_last_seen[f"channel_{item_name}"] = get_moscow_time()
         
         # Параллельная загрузка пользователей для всех предметов
         item_names = list(current_stock.keys())
