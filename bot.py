@@ -505,6 +505,14 @@ class DiscordStockParser:
         last_time = item_last_seen[item_name]
         return (now - last_time).total_seconds() >= 90
     
+    def should_notify_item(self, item_name: str) -> bool:
+        """Проверяет, можно ли отправлять уведомления для предмета (глобальный кулдаун)"""
+        if item_name not in item_last_seen:
+            return True
+        now = get_moscow_time()
+        last_time = item_last_seen[item_name]
+        return (now - last_time).total_seconds() >= 90
+    
     def can_send_to_user(self, user_id: int, item_name: str) -> bool:
         if user_id not in user_sent_notifications:
             return True
