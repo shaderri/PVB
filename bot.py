@@ -69,6 +69,7 @@ ITEMS_DATA = {
     "King Limone": {"emoji": "🍋", "price": "$670m", "category": "seed"},
     "Starfruit": {"emoji": "⭐", "price": "$750m", "category": "seed"},
     "Brussel Sprouts": {"emoji": "🥬", "price": "$900m", "category": "seed"},
+    "Kiwi Cannoneer": {"emoji": "🥝", "price": "$1b", "category": "seed"},
     "Water Bucket": {"emoji": "🪣", "price": "$7,500", "category": "gear"},
     "Frost Grenade": {"emoji": "❄️", "price": "$12,500", "category": "gear"},
     "Banana Gun": {"emoji": "🍌", "price": "$25,000", "category": "gear"},
@@ -76,7 +77,7 @@ ITEMS_DATA = {
     "Carrot Launcher": {"emoji": "🥕", "price": "$500,000", "category": "gear"}
 }
 
-NOTIFICATION_ITEMS = ["Shroombino", "Mango", "King Limone", "Starfruit", "Brussel Sprouts"]
+NOTIFICATION_ITEMS = ["King Limone", "Starfruit", "Brussel Sprouts", "Kiwi Cannoneer"]
 
 # ID канала для публичных уведомлений о редких предметах
 NOTIFICATION_CHANNEL_ID = os.getenv("NOTIFICATION_CHANNEL_ID")  # Добавь в .env
@@ -404,6 +405,9 @@ class DiscordStockParser:
             'brussel sprouts': 'Brussel Sprouts',
             'brussel': 'Brussel Sprouts',
             'sprouts': 'Brussel Sprouts',
+            'kiwi': 'Kiwi Cannoneer',
+            'kiwi cannoneer': 'Kiwi Cannoneer',
+            'cannoneer': 'Kiwi Cannoneer',
             'water': 'Water Bucket',
             'water bucket': 'Water Bucket',
             'bucket': 'Water Bucket',
@@ -466,14 +470,12 @@ class DiscordStockParser:
             
             # Определяем уровень редкости
             rarity_emoji = "💎"
-            if item_name == "Brussel Sprouts":
+            if item_name == "Kiwi Cannoneer":
+                rarity_emoji = "👑💚"
+            elif item_name == "Brussel Sprouts":
                 rarity_emoji = "👑"
             elif item_name in ["Starfruit", "King Limone"]:
                 rarity_emoji = "🌟"
-            elif item_name == "Mango":
-                rarity_emoji = "💎"
-            elif item_name == "Shroombino":
-                rarity_emoji = "💜"
             
             message = (
                 f"{rarity_emoji} *РЕДКИЙ СТОК!* {rarity_emoji}\n\n"
