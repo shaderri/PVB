@@ -363,7 +363,7 @@ class DiscordStockParser:
                     clean_line = clean_line.replace(emoji, '')
                 
                 # Ищем паттерн: цифра + x + название
-                match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?
+                match = re.search(r'(\d+)x\s+(.+?)(?:\s+Seed|\s+Gun|\s+Launcher|\s+Grenade|\s+Bucket|\s+Blower)?', clean_line, re.IGNORECASE)
     
     def normalize_item_name(self, raw_name: str) -> Optional[str]:
         """Нормализует название предмета"""
@@ -1024,4 +1024,4 @@ def main():
         logger.info("⚠️ Остановка")
 
 if __name__ == "__main__":
-    main(), clean_line, re.IGNORECASE)
+    main()
